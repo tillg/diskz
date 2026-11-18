@@ -55,11 +55,7 @@ let count = Int(number("-n") ?? 25)
 guard let command = args.first else { fail(usage) }
 args.removeFirst()
 
-if dbPath == nil {
-    let dir = NSHomeDirectory() + "/Library/Application Support/diskz"
-    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    dbPath = dir + "/diskz.sqlite"
-}
+if dbPath == nil { dbPath = try Store.defaultPath }
 
 let dateFormat = DateFormatter()
 dateFormat.dateFormat = "yyyy-MM-dd HH:mm"

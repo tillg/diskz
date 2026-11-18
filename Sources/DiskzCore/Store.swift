@@ -21,6 +21,11 @@ public struct DirSize: Sendable {
     public var unknown: Bool
 }
 
+public struct DiskSample: Sendable {
+    public var at: Date
+    public var usage: DiskUsage
+}
+
 public struct StoreError: Error, CustomStringConvertible {
     public let description: String
 }
@@ -38,6 +43,15 @@ public final class Store {
     private let db: Database
     private let cutoff: Int64
 
+    /// The database shared by the app and the command-line tool.
+    public static var defaultPath: String {
+        get throws {
+            let dir = NSHomeDirectory() + "/Library/Application Support/diskz"
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            return dir + "/diskz.sqlite"
+        }
+    }
+
     /// Directories whose subtree is smaller than `cutoff` bytes get no history of their own.
     public init(path: String, cutoff: Int64 = 1 << 20) throws {
         db = try Database(path: path)
@@ -54,6 +68,7 @@ public final class Store {
                 dir_id INTEGER NOT NULL, scan_id INTEGER NOT NULL, alloc INTEGER NOT NULL, logical INTEGER NOT NULL,
                 files INTEGER NOT NULL, unknown INTEGER NOT NULL, PRIMARY KEY(dir_id, scan_id)) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS sizes_scan ON sizes(scan_id);
+            CREATE TABLE IF NOT EXISTS disk_samples(at REAL PRIMARY KEY, used INTEGER NOT NULL, free INTEGER NOT NULL);
             """)
     }
 
@@ -156,7 +171,25 @@ public final class Store {
         Int(try db.query("SELECT COUNT(*) FROM sizes WHERE scan_id = ?", [scan]) { $0.int(0) }[0])
     }
 
+    // MARK: Disk usage samples
+
+    /// Stores disk used/free on its own, so the figure survives even if the scan that follows is cancelled.
+    public func recordSample(_ usage: DiskUsage, at date: Date = Date()) throws {
+        try db.run("INSERT OR REPLACE INTO disk_samples(at, used, free) VALUES (?, ?, ?)",
+                   [date.timeIntervalSince1970, usage.used, usage.free])
+    }
+
+    public func samples() throws -> [DiskSample] {
+        try db.query("SELECT at, used, free FROM disk_samples ORDER BY at") { row in
+            DiskSample(at: Date(timeIntervalSince1970: row.double(0)), usage: DiskUsage(used: row.int(1), free: row.int(2)))
+        }
+    }
+
     // MARK: Reading
+
+    public func lastScan(ofRoot root: String) throws -> ScanInfo? {
+        try scans().last { $0.root == root }
+    }
 
     public func scans() throws -> [ScanInfo] {
         try db.query("""

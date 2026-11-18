@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-labelledby="title">
+  <title id="title">Utility icon with wrench and device</title>
+  <defs>
+    <path id="tile" d="M69 20h62c32 0 50 18 50 50v61c0 32-18 50-50 50H69c-32 0-50-18-50-50V70c0-32 18-50 50-50Z"/>
+    <clipPath id="tile-clip"><use href="#tile"/></clipPath>
+    <linearGradient id="base" x2="0" y2="1">
+      <stop stop-color="#FF6482"/>
+      <stop offset="1" stop-color="#FF2D55"/>
+    </linearGradient>
+    <linearGradient id="metal" x1=".22" y1="0" x2=".64" y2="1">
+      <stop stop-color="#FF2D55"/>
+      <stop offset=".45" stop-color="#A30F33"/>
+      <stop offset=".76" stop-color="#8A0D2B"/>
+      <stop offset="1" stop-color="#B81339"/>
+    </linearGradient>
+    <linearGradient id="edge" x2="0" y2="1">
+      <stop stop-color="#D81B45"/>
+      <stop offset="1" stop-color="#8A0D2B"/>
+    </linearGradient>
+    <linearGradient id="plate" x2="0" y2="1">
+      <stop offset=".46" stop-color="#FFE3E9"/>
+      <stop offset="1" stop-color="#FFD9E1"/>
+    </linearGradient>
+    <linearGradient id="device" x2="0" y2="1">
+      <stop stop-color="#FFC2CF"/>
+      <stop offset="1" stop-color="#FF6482"/>
+    </linearGradient>
+  </defs>
+
+  <use href="#tile" fill="url(#base)" stroke="#FFC2CF" stroke-width="2"/>
+
+  <g clip-path="url(#tile-clip)">
+    <path d="M59 116V80q0-5 5-8l30-18q6-3 11 0l30 18q6 4 6 10v31q0 6-6 10l-29 17q-6 4-12 0l-29-17q-6-4-6-7Z"
+          fill="url(#plate)" stroke="#FFC2CF" stroke-width=".8"/>
+    <path d="M57 57C44 65 36 82 34 99c-3 25 9 46 29 59 7 5 10 11 10 20v11h54v-11c0-9 3-15 10-20 20-13 32-34 29-59-2-17-10-34-23-42-1-.7-2 .2-2 2v50c0 7-3 12-9 16l-27 15c-3 2-7 2-10 0l-27-15c-6-4-9-9-9-16V59c0-1.8-1-2.7-2-2Z"
+          fill="url(#metal)" stroke="url(#edge)" stroke-width="1.5"/>
+    <rect x="81.8" y="73.4" width="36.4" height="46.7" rx="3.3" fill="url(#device)" stroke="#FFD9E1" stroke-width=".7"/>
+    <path d="M86 116.5h7" stroke="#5C1024" stroke-width="2.8" stroke-linecap="round"/>
+    <g fill="#5C1024">
+      <circle cx="105" cy="116.5" r="1.6"/>
+      <circle cx="109.6" cy="116.5" r="1.6"/>
+      <circle cx="114.2" cy="116.5" r="1.6"/>
+    </g>
+    <use href="#tile" fill="none" stroke="#FFE3E9" stroke-opacity=".36" stroke-width="3"/>
+  </g>
+</svg>

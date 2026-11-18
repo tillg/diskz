@@ -7,15 +7,17 @@ public struct ScanError: Error, CustomStringConvertible {
 
 public enum Scanner {
     /// Walks `root` without following symlinks or crossing into other mounted volumes.
-    public static func scan(root: String) throws -> ScanResult {
+    /// `control` can pause or cancel the walk; a cancelled scan throws `ScanCancelled`.
+    public static func scan(root: String, control: ScanControl = ScanControl()) throws -> ScanResult {
         guard let resolved = realpath(root, nil) else {
             throw ScanError(description: "cannot resolve \(root): \(String(cString: strerror(errno)))")
         }
         let rootPath = String(cString: resolved)
         free(resolved)
 
-        // Never download cloud-only ("dataless") files or folders while scanning.
-        setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+        // Never download cloud-only ("dataless") files or folders while scanning. The setting covers
+        // only the scanning thread, so the rest of the app can still open cloud files normally.
+        setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
 
         let started = Date()
         let fd = open(rootPath, O_RDONLY | O_DIRECTORY)
@@ -27,21 +29,19 @@ public enum Scanner {
         fstat(fd, &st)
 
         // Disk used and free are measured first, before the walk.
-        var fs = statfs()
-        statfs(rootPath, &fs)
-        let blockSize = Int64(fs.f_bsize)
+        let usage = try DiskUsage.current(of: rootPath)
 
-        let walker = Walker(device: st.st_dev)
+        let walker = Walker(device: st.st_dev, control: control)
         walker.nodes.append(ScanNode(parent: -1, name: rootPath))
-        walker.walk(fd: fd, node: 0)
+        try walker.walk(fd: fd, node: 0)
         walker.attributeHardLinks()
 
         return ScanResult(
             nodes: walker.nodes,
             startedAt: started,
             finishedAt: Date(),
-            diskUsed: (Int64(fs.f_blocks) - Int64(fs.f_bfree)) * blockSize,
-            diskFree: Int64(fs.f_bfree) * blockSize,
+            diskUsed: usage.used,
+            diskFree: usage.free,
             entryErrors: walker.entryErrors)
     }
 }
@@ -62,14 +62,16 @@ private final class Walker {
     var nodes: [ScanNode] = []
     var entryErrors = 0
     private let device: dev_t
+    private let control: ScanControl
     /// Files with several hard links, by inode: counted once, in the lowest-path directory.
     private var hardLinks: [UInt64: (node: Int, alloc: Int64, logical: Int64)] = [:]
     private let bufferSize = 256 * 1024
     private let buffer: UnsafeMutableRawPointer
     private var request = attrlist()
 
-    init(device: dev_t) {
+    init(device: dev_t, control: ScanControl) {
         self.device = device
+        self.control = control
         buffer = .allocate(byteCount: bufferSize, alignment: 8)
         request.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
         request.commonattr = cmnReturnedAttrs | cmnName | cmnError | cmnObjType | cmnFileID
@@ -78,14 +80,18 @@ private final class Walker {
 
     deinit { buffer.deallocate() }
 
-    func walk(fd: Int32, node: Int) {
+    func walk(fd: Int32, node: Int) throws {
+        try control.checkpoint(enteringDirectory: true)
         var subdirs: [String] = []
         var alloc: Int64 = 0, logical: Int64 = 0, files: Int64 = 0
+        var batches = 0
 
         // The buffer is shared with recursive calls, so each directory is read completely first.
         while true {
             let count = getattrlistbulk(fd, &request, buffer, bufferSize, 0)
             if count == 0 { break }
+            defer { batches += 1 }
+            if batches > 0 { try control.checkpoint(enteringDirectory: false) } // huge directories
             if count < 0 {
                 if errno == EINTR { continue }
                 // A cloud-only folder holds nothing locally; anything else leaves the size unknown.
@@ -167,7 +173,7 @@ private final class Walker {
             var st = stat()
             if fstat(child, &st) != 0 || st.st_dev != device { continue } // another volume is mounted here
             nodes.append(ScanNode(parent: node, name: name))
-            walk(fd: child, node: nodes.count - 1)
+            try walk(fd: child, node: nodes.count - 1)
         }
     }
 

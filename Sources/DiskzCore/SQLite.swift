@@ -68,6 +68,7 @@ final class Database {
             throw SQLiteError(description: "cannot open database at \(path)")
         }
         handle = h
+        sqlite3_busy_timeout(h, 10_000) // the app and the CLI may use the same database
     }
 
     deinit { sqlite3_close(handle) }

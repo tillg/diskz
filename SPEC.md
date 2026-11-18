@@ -64,7 +64,7 @@ A scan **starts** when all of these hold:
 
 - no keyboard or mouse input for 5 minutes
 - on AC power (or battery above 50 %), and not in Low Power Mode
-- thermal state is normal
+- thermal state is nominal or fair (macOS's two lower levels; "serious" and "critical" block a scan)
 - the last completed scan is more than 24 hours old (the minimum interval, a single setting so the frequency can be raised later; every scan stores its exact start and end time, so the history stays valid at any frequency)
 
 Every scan **begins by recording disk used and free**, before walking any directory.
@@ -72,10 +72,12 @@ Every scan **begins by recording disk used and free**, before walking any direct
 While scanning:
 
 - disk I/O and CPU run at background priority
-- the scan **pauses within 2 seconds** of user input and resumes at the next idle period from where it stopped
+- the scan **pauses within 2 seconds** of user input and resumes at the next idle period from where it stopped. The paused scan stays in memory; quitting the app discards it. The final save to the database is not interruptible
 - a scan that cannot finish within 24 hours of starting is discarded and restarted
 
-A manual "Scan now" ignores the idle conditions.
+A manual "Scan now" ignores the idle conditions. Known limit: "Finish scan now" on a scan that was started by the idle rule lifts the pausing but keeps that scan's background priority, so it finishes slowly.
+
+**Start at login** is a menu toggle that is off until switched on, so that building and testing the app never registers a login item unasked.
 
 **Process model — recommendation:** one app that starts at login, lives in the menu bar, and scans in-process. *Alternative:* a separate background agent plus a UI app. The agent keeps scanning when the UI is quit, but it means two binaries, two permission grants and an IPC layer.
 
@@ -85,6 +87,7 @@ SQLite database at `~/Library/Application Support/diskz/diskz.sqlite`.
 
 - **`scans`**: start, end, status, volume used and free bytes.
 - **`dirs`**: id, parent, name. One row per directory ever seen.
+- **`disk_samples`**: time, disk used, disk free. Written at the start of every scan attempt, so the figure is kept even if the scan is cancelled.
 - **`sizes`**: directory, scan, allocated bytes, logical bytes, file count. A row is written **only when the value differs** from that directory's previous row.
 
 Rules:
@@ -156,6 +159,23 @@ Open: 305 GB of 839 GB is still "Not attributed". The Data volume alone holds 87
 
 The bulk-attribute call works and is used. Private (clone-aware) size was not benchmarked, since clones are counted in full in v1.
 
+### Milestone 2 results (2026-11-18)
+
+Built: `Diskz.app` (menu bar only), idle scheduler, pause/resume/cancel in the scanner, disk used/free stored at scan start, build and signing scripts. 29 automated tests pass.
+
+| Check | Result |
+|---|---|
+| Signing | Pass. Full Disk Access was granted to one build; a rebuild with a different code hash, signed with the same self-signed certificate, still had access. Decision 1 holds. |
+| A4, pause | Pass. In the running app, 22 pauses on real input took 0.51 to 0.99 s (average 0.73 s). The automated test confirms a paused and resumed scan equals an uninterrupted one. |
+| A5 again | Pass. The no-download setting now covers only the scanning thread; still 2,174 cloud-only items after a CLI scan and after the app's full scan. |
+| Full app scan | Pass. With Full Disk Access, started by the idle rule (with a 3-second test threshold) and paused 9 times by real input: 1,025,317 folders, 270 unreadable, 574 GB scanned (decimal). Walking took 569 s of wall time including pauses; the final save, which cannot pause, took 0.9 s. The CLI reads the result from the shared database. |
+| A8 | Partly. The scanner reports unreadable folders as unknown (milestone 1) and the menu shows their count, but a complete app scan without Full Disk Access was not observed, because access was granted while it ran. |
+| Start at login | Not tested. Needs the toggle switched on and a logout. |
+| Automatic start under the real 5-minute rule | Not observed yet. The first is due after 2026-11-19 13:37; the log will show it. |
+| Failed scans | A scan that fails or is discarded is retried after one hour at the earliest (unit test), so a lasting fault cannot restart it every second. |
+| Menu | The user operated it; "Finish scan now" worked. A stale status line (it did not refresh while the menu was open) was reported and fixed; the fix is not yet confirmed by the user. |
+| Logo | `logo.svg`, supplied by the user. App icon and menu bar icon are rendered from it by `scripts/make-icon.sh`. |
+
 ## 12. Possible later
 
 Scanning the folders that changed most in the past first (useful once scans can be interrupted), treemap view, growth alerts, external volumes, exclusion rules, CSV export, cleanup suggestions.
@@ -175,6 +195,5 @@ Scanning the folders that changed most in the past first (useful once scans can 
 
 ## 14. Still open
 
-- Does Full Disk Access survive a rebuild with the self-signed certificate? Decided by experiment at the start of milestone 2; if not, decision 1 is revisited.
 - Private (clone-aware) size: cost not benchmarked; only matters if decision 5 is revisited.
 - What the remaining 305 GB "Not attributed" consists of. Root-only folders are ruled out (about 4 GB). Next check: whether the gap survives a restart, and Disk Utility First Aid on the Data volume.

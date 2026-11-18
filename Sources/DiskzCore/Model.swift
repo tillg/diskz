@@ -53,6 +53,26 @@ public struct ScanResult: Sendable {
     }
 }
 
+/// Used and free bytes of the whole disk a path lives on (capacity − free, and free).
+public struct DiskUsage: Sendable, Equatable {
+    public var used: Int64
+    public var free: Int64
+
+    public init(used: Int64, free: Int64) {
+        self.used = used
+        self.free = free
+    }
+
+    public static func current(of path: String) throws -> DiskUsage {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else {
+            throw ScanError(description: "cannot read disk usage of \(path): \(String(cString: strerror(errno)))")
+        }
+        let blockSize = Int64(fs.f_bsize)
+        return DiskUsage(used: (Int64(fs.f_blocks) - Int64(fs.f_bfree)) * blockSize, free: Int64(fs.f_bfree) * blockSize)
+    }
+}
+
 func joinPath(_ root: String, _ parts: [String]) -> String {
     if parts.isEmpty { return root }
     return (root.hasSuffix("/") ? root : root + "/") + parts.joined(separator: "/")

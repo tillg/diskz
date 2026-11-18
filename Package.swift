@@ -7,6 +7,8 @@ let package = Package(
     targets: [
         .target(name: "DiskzCore"),
         .executableTarget(name: "diskz", dependencies: ["DiskzCore"]),
+        // The menu bar app. scripts/build-app.sh wraps this binary into Diskz.app.
+        .executableTarget(name: "DiskzApp", dependencies: ["DiskzCore"]),
         .testTarget(
             name: "DiskzCoreTests",
             dependencies: ["DiskzCore"],
