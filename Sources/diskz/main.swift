@@ -23,8 +23,9 @@ func fail(_ message: String) -> Never {
 func bytes(_ n: Int64) -> String {
     let units = ["B", "KB", "MB", "GB", "TB"]
     var value = Double(abs(n)), unit = 0
-    while value >= 1024, unit < units.count - 1 {
-        value /= 1024
+    // Decimal units, like Finder and Disk Utility.
+    while value >= 1000, unit < units.count - 1 {
+        value /= 1000
         unit += 1
     }
     return (n < 0 ? "-" : "") + String(format: unit == 0 ? "%.0f %@" : "%.1f %@", value, units[unit])

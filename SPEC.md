@@ -140,7 +140,7 @@ The numbers below, and the size estimates in section 7, are initial targets to c
 
 ### Milestone 1 results (2026-11-18)
 
-Built: scanner, store, `diskz` CLI. 19 automated tests pass. Measured on this Mac from a terminal **without** Full Disk Access:
+Built: scanner, store, `diskz` CLI. 19 automated tests pass. Sizes in this section are binary gigabytes (1 GB = 2^30 bytes), as the CLI printed them at the time; the CLI has since switched to decimal units like Finder and Disk Utility, in which the same amounts read about 7 % higher. Measured on this Mac from a terminal **without** Full Disk Access:
 
 | # | Result |
 |---|---|
@@ -152,7 +152,7 @@ Built: scanner, store, `diskz` CLI. 19 automated tests pass. Measured on this Ma
 
 **With Full Disk Access** (terminal granted, same day): 173.8 s at normal priority for 4.9 million files in 1.0 million directories; 533.7 GB scanned, 268 directories still unreadable (root-only system folders and the other user account). The newly readable 307 GB was not reported as growth: `diff` against the previous scan shows +203 MB. Database: 6.8 MB after three scans.
 
-Open: 305 GB of 839 GB is still "Not attributed". The Data volume alone holds 875.6 GB according to `diskutil`, and it has no snapshots, so roughly 340 GB sits in places a normal user cannot read or is not file data at all. Splitting that needs a scan as root, which touches decision 7.
+Open: 305 GB of 839 GB is still "Not attributed". The Data volume alone holds 875.6 GB according to `diskutil`, and it has no snapshots, so roughly 340 GB sits in places a normal user cannot read or is not file data at all. A scan as root (started through the password dialog, so without Full Disk Access) made the root-only folders readable: they hold only about 4 GB (`/Users/administrator` 1.1 GB, `/private/var` 11.3 GB against 10.0 GB, `.fseventsd` 0.5 GB). So the gap is not in root-only folders, and decision 7 stands. A scan as root **with** Full Disk Access read nearly everything (87 directories left): 548.8 GB scanned, including `.Spotlight-V100` 7.7 GB and `.DocumentRevisions-V100` 0.2 GB. Disk Utility reports 816.5 GB (binary) used on the Data volume, so about 268 GB is used by something no file walk can see. Purgeable space is only 2 GB and the volume lists no snapshots. The scan found 6,049,940 of the volume's 6,055,408 inodes (99.9 %), so the space does not belong to files the scan missed. Deleted-but-open files are ruled out too (largest: 31 MB). What remains is space the file system holds outside any visible file; not yet checked: whether it survives a restart, and what Disk Utility First Aid reports.
 
 The bulk-attribute call works and is used. Private (clone-aware) size was not benchmarked, since clones are counted in full in v1.
 
@@ -177,4 +177,4 @@ Scanning the folders that changed most in the past first (useful once scans can 
 
 - Does Full Disk Access survive a rebuild with the self-signed certificate? Decided by experiment at the start of milestone 2; if not, decision 1 is revisited.
 - Private (clone-aware) size: cost not benchmarked; only matters if decision 5 is revisited.
-- What the remaining 305 GB "Not attributed" consists of. Needs one scan as root (`sudo diskz scan`).
+- What the remaining 305 GB "Not attributed" consists of. Root-only folders are ruled out (about 4 GB). Next check: whether the gap survives a restart, and Disk Utility First Aid on the Data volume.
