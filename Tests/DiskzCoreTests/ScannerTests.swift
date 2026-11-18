@@ -71,8 +71,8 @@ import Testing
         let totals = r.totals()
         let expected = try du(f.root)
 
-        #expect(r.nodes.count == 302)
-        #expect(totals[0].files == 3300)
+        #expect(r.nodes.count == 302, "\(r.nodes.count) directories")
+        #expect(totals[0].files == 3300, "\(totals[0].files) files, \(r.entryErrors) entry errors, \(r.nodes.count(where: \.unknown)) unknown")
         let scanned = Set(r.nodes.indices.map { r.path(of: $0) })
         let onlyScan = scanned.subtracting(expected.keys), onlyDu = Set(expected.keys).subtracting(scanned)
         func show(_ s: Set<String>) -> String {

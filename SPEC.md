@@ -105,7 +105,8 @@ A normal window, opened from a **menu bar item** that shows the last scan time, 
 | Task | View |
 |---|---|
 | How full is the disk, and how did that develop? | **Overview:** used and free space over time, with the "Not attributed" share. |
-| What grew? | **Changes:** pick two dates; lists the top growing and shrinking directories with their delta. This is the main view. A directory is left out when one subdirectory explains at least 80 % of its change, so the list names the folder that grew, not every parent up to `/`. A folder that merely became readable (e.g. after granting Full Disk Access) is not listed as growth. |
+| What crept in lately? | **Growers:** pick a period (last day, 7 days, 30 days, all history); lists the folders that gained space since the scan at the start of that period, largest gain first. Each row has a small trend line and a word for the pattern: *steady*, *one jump* (one step between two scans carries at least 80 % of the gain), *up and down* (the size moved more than twice as much as it gained), or *was < 1 MB* (no earlier size: new, or too small to have a history). A row that lies inside another listed folder is marked with an arrow, because the outer folder's gain already includes it. The view names the two scans it compares and says so when the history is shorter than the period. Periods count back from the latest scan. Added after milestone 3 at the user's request. |
+| What grew? | **Changes:** pick two dates; lists the top growing and shrinking directories with their delta. This is the main view. A directory is left out when one subdirectory explains at least 80 % of its change, so the list names the folder that grew, not every parent up to `/`. A tree that is entirely new or entirely gone is listed as its top folder only. A folder that merely became readable (e.g. after granting Full Disk Access) is not listed as growth. |
 | Where is the space now? | **Browser:** a table of subfolders, sortable by size and by change since a chosen scan; double-click opens a folder. (A table you drill into, not a tree outline: simpler, and enough to answer the question.) |
 | When did this folder grow? | **Directory detail:** size-over-time chart for one directory, with "Reveal in Finder". |
 | Is scanning working? | **Status:** last and next scan, duration, unreadable directories, database size. |
@@ -191,6 +192,17 @@ Built: the window with Changes, Browser, Overview and Status, a size-over-time c
 | Not verified | How the real window looks and opens, and every interaction: double-click to open a folder, sorting, the scan pickers, chart hover, "Reveal in Finder", and refresh when a scan finishes while the window is open. One AppKit warning about the Status table appears in snapshot runs; cause not found. |
 
 Known limit: the per-folder chart shows recorded sizes as they were, so a parent folder jumps when a subfolder becomes readable; only the Changes and Browser columns correct for that.
+
+### Growers view results (2026-11-18)
+
+| Check | Result |
+|---|---|
+| Rules | Automated tests: whole new or deleted trees collapse to their top folder (three cases, one of which first failed), baseline choice for a period, and the three growth patterns. 47 tests pass. |
+| Rendering | Snapshots in light and dark from a generated 120-scan history, the app's real two-scan database and a one-scan database: ranking, trend lines, pattern words, arrows on nested rows with their explanation, the comparison line, the empty state. |
+| Periods | On the 120-scan history the baselines are 1 day, 7 days and 30 days back and the oldest scan, as intended. Only "Last 7 days" was rendered as an image. |
+| Not verified | Switching periods and selecting rows in the real window. Real usefulness: the app has two scans 40 minutes apart; the view needs about a week of daily scans. |
+
+Test note: several scanner tests became flaky during this work. Cause: a Finder window showing the temp folder wrote `.DS_Store` into the test folders, which the scanner correctly counted. Fixtures now sit one level deeper. The fix is plausible but unconfirmed, because Finder had stopped writing those files when the suite was rerun (14 passes).
 
 ## 12. Possible later
 

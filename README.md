@@ -59,16 +59,17 @@ once the Mac is idle again. Its menu offers:
 | Scan now / Finish scan now | scans regardless of the idle conditions |
 | Start at login | off until you switch it on |
 
-The window has four sections:
+The window has five sections:
 
 | Section | Answers |
 |---|---|
+| Growers | What grew lately? Pick last day, 7 days, 30 days or all history; folders are ranked by how much they gained, with a small trend line and a word for how they grew (steady, one jump, up and down, was < 1 MB). Rows inside another listed folder are marked with an arrow; don't add them up. |
 | Changes | What grew or shrank between two scans you pick? Largest change first. |
 | Browser | Where is the space now? A table of subfolders with size and change; double-click to open a folder, back and forward buttons (⌘[ and ⌘]) as in Finder. |
 | Overview | How full is the disk, and how did that develop? Includes the "not attributed" share. |
 | Status | Is scanning working? Last scan, database size, Full Disk Access (with a button to grant it), and the folders that could not be read. |
 
-Selecting a folder in Changes or Browser shows its size over time and a "Reveal in Finder" button.
+Selecting a folder in Growers, Changes or Browser shows its size over time and a "Reveal in Finder" button.
 Paths are shown without the `/System/Volumes/Data` prefix where that names the same folder.
 
 For development, `Diskz --snapshot DIR [--db FILE | --demo SCANS] [--no-access]` renders every section to PNG
@@ -122,5 +123,6 @@ Full Disk Access in System Settings → Privacy & Security → Full Disk Access,
 - **History:** a SQLite database stores a directory's size only when it differs from the
   previous scan. Directories under 1 MB get no history of their own; they count toward their parent.
 - **Retention:** every scan for 30 days, then one per week for a year, then one per 30 days.
-- **`diff`** names the folder that changed, not every parent folder above it. A folder that
+- **`diff`** names the folder that changed, not every parent folder above it, and a tree that is
+  entirely new or entirely gone as its top folder only. A folder that
   merely became readable (for example after granting Full Disk Access) is not reported as growth.

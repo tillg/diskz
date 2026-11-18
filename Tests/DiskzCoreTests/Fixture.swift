@@ -7,17 +7,21 @@ let MB = 1 << 20
 /// A real directory tree in a temp folder. No mocks: tests scan the actual file system.
 final class Fixture {
     let root: String
+    private let container: String
     private let fm = FileManager.default
     private var databases: [String] = []
 
     init() throws {
+        // The tree lives one level below the temp folder: a Finder window showing the temp folder
+        // drops a .DS_Store into every folder it lists, which would count as an extra file.
         let dir = NSTemporaryDirectory() + "diskz-" + UUID().uuidString
-        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        root = String(cString: realpath(dir, nil))
+        try fm.createDirectory(atPath: dir + "/root", withIntermediateDirectories: true)
+        container = String(cString: realpath(dir, nil))
+        root = container + "/root"
     }
 
     deinit {
-        try? fm.removeItem(atPath: root)
+        try? fm.removeItem(atPath: container)
         for db in databases { try? fm.removeItem(atPath: db) }
     }
 

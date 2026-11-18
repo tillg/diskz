@@ -334,14 +334,24 @@ public final class Store {
     ///
     /// - A directory is left out when a single subdirectory explains at least 80 % of its change,
     ///   so the list names the folder that grew rather than every ancestor up to the root.
+    /// - Below a directory that is entirely new or entirely gone, nothing is listed: the top folder says it all.
     /// - A directory that merely became readable or unreadable is not a change, and its size is
     ///   taken out of its ancestors' changes.
     public func changes(from: Int64, to: Int64, limit: Int = 50) throws -> [Change] {
         let c = try comparison(from: from, to: to)
-        // Pass-through ancestors: one child explains at least 80 % of the change.
-        // (A folder hidden here still hides its own parent, so whole chains collapse.)
+        // A tree that is entirely new or entirely gone is listed as its top folder only.
         var hidden = c.inaccessible
-        for (id, entry) in c.entries where !c.inaccessible.contains(id) {
+        for id in c.entries.keys {
+            let insideWholeTree = c.ancestors(of: id).contains { ancestor in
+                guard let entry = c.entries[ancestor], !c.inaccessible.contains(ancestor) else { return false }
+                return entry.delta != 0 && (entry.before == 0 || entry.after == 0)
+            }
+            if insideWholeTree { hidden.insert(id) }
+        }
+        // Pass-through ancestors: one child explains at least 80 % of the change.
+        // (A folder hidden by this rule still hides its own parent, so whole chains collapse.)
+        let unlisted = hidden
+        for (id, entry) in c.entries where !unlisted.contains(id) {
             guard let parent = c.parentOf[id], let parentEntry = c.entries[parent] else { continue }
             let (child, whole) = (entry.delta, parentEntry.delta)
             if child != 0, (child > 0) == (whole > 0), abs(child) * 5 >= abs(whole) * 4 {

@@ -3,10 +3,11 @@ import DiskzCore
 import SwiftUI
 
 enum Section: String, CaseIterable, Identifiable {
-    case changes = "Changes", browser = "Browser", overview = "Overview", status = "Status"
+    case growers = "Growers", changes = "Changes", browser = "Browser", overview = "Overview", status = "Status"
     var id: String { rawValue }
     var symbol: String {
         switch self {
+        case .growers: "chart.line.uptrend.xyaxis"
         case .changes: "arrow.up.arrow.down"
         case .browser: "folder"
         case .overview: "chart.xyaxis.line"
@@ -18,7 +19,7 @@ enum Section: String, CaseIterable, Identifiable {
 struct MainWindow: View {
     let library: Library
     let model: AppModel?
-    @State var section: Section = .changes
+    @State var section: Section = .growers
     /// Snapshot mode has no running app to ask, so it can state that access is missing.
     var assumeNoAccess = false
 
@@ -26,7 +27,7 @@ struct MainWindow: View {
 
     var body: some View {
         NavigationSplitView {
-            List(Section.allCases, selection: Binding(get: { section }, set: { section = $0 ?? .changes })) { item in
+            List(Section.allCases, selection: Binding(get: { section }, set: { section = $0 ?? .growers })) { item in
                 Label(item.rawValue, systemImage: item.symbol).tag(item)
             }
             .navigationSplitViewColumnWidth(160)
@@ -37,6 +38,7 @@ struct MainWindow: View {
                                            description: Text("diskz scans by itself when the Mac is idle. You can also choose “Scan now” from its menu bar icon."))
                 } else {
                     switch section {
+                    case .growers: GrowersView(library: library)
                     case .changes: ChangesView(library: library)
                     case .browser: BrowserView(library: library)
                     case .overview: OverviewView(library: library)
@@ -47,6 +49,130 @@ struct MainWindow: View {
             .navigationTitle(section.rawValue)
         }
         .frame(minWidth: 820, minHeight: 540)
+    }
+}
+
+// MARK: What grew lately
+
+struct GrowersView: View {
+    let library: Library
+    @State private var window = Window.week
+    @State private var result: Library.Growers?
+    @State private var selection: String?
+
+    enum Window: String, CaseIterable, Identifiable {
+        case day = "Last day", week = "Last 7 days", month = "Last 30 days", all = "All history"
+        var id: String { rawValue }
+        var seconds: TimeInterval? {
+            switch self {
+            case .day: 86_400
+            case .week: 7 * 86_400
+            case .month: 30 * 86_400
+            case .all: nil
+            }
+        }
+    }
+
+    private struct Key: Equatable {
+        var window: Window, revision: Int
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Grew in the", selection: $window) {
+                    ForEach(Window.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                if let result {
+                    // Both scan dates, on a line of their own so they are never cut off.
+                    Text("Comparing the scans of \(formatDate(result.baseline.startedAt)) and \(formatDate(result.latest.startedAt))"
+                        + (result.coversWindow ? "" : " (the history does not go back further)"))
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Divider()
+            if library.scans.count < 2 {
+                ContentUnavailableView("Only one scan so far", systemImage: "clock",
+                                       description: Text("Growth appears after the second scan."))
+                    .frame(maxHeight: .infinity)
+            } else if let result, !result.rows.isEmpty {
+                Table(result.rows, selection: $selection) {
+                    TableColumn("Folder") { row in
+                        HStack(spacing: 4) {
+                            if row.inside != nil {
+                                Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
+                            }
+                            Text(library.display(row.change.path)).lineLimit(1).truncationMode(.middle)
+                        }
+                        .help(row.inside.map { "Part of \(library.display($0)), which is listed too. Its gain already includes this one." } ?? row.change.path)
+                    }
+                    TableColumn("Grew by") { row in Text(formatSigned(row.change.delta)).monospacedDigit() }.width(110)
+                    TableColumn("Now") { row in Text(formatBytes(row.change.after)).monospacedDigit() }.width(90)
+                    TableColumn("How") { row in
+                        HStack(spacing: 8) {
+                            Sparkline(sizes: row.sizes).frame(width: 70, height: 16)
+                            Text(how(row)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .width(170)
+                }
+                if result.rows.contains(where: { $0.inside != nil }) {
+                    Label("Rows marked with this arrow lie inside another listed folder, whose gain already includes theirs. Do not add them up.",
+                          systemImage: "arrow.turn.down.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.vertical, 5)
+                }
+                if let selection {
+                    Divider()
+                    FolderDetail(library: library, path: selection).frame(height: 230)
+                }
+            } else {
+                ContentUnavailableView("Nothing grew", systemImage: "checkmark.circle",
+                                       description: Text("No folder is larger than it was at the earlier scan."))
+                    .frame(maxHeight: .infinity)
+            }
+        }
+        .task(id: Key(window: window, revision: library.revision)) {
+            result = library.growers(window: window.seconds)
+            if result?.rows.contains(where: { $0.id == selection }) != true { selection = result?.rows.first?.id }
+        }
+    }
+}
+
+private func how(_ row: Library.Grower) -> String {
+    if row.change.before == 0 { return "was < 1 MB" } // new, or too small to have a history
+    switch row.pattern {
+    case .jump: return "one jump"
+    case .steady: return "steady"
+    case .fluctuating: return "up and down"
+    case nil: return ""
+    }
+}
+
+/// A folder's sizes over the scans in the window, as a small line: flat then a step is a jump, a slope is creep.
+struct Sparkline: View {
+    let sizes: [Int64]
+
+    var body: some View {
+        Canvas { context, size in
+            // Two sizes would always draw the same straight line, which says nothing.
+            guard sizes.count >= 3, let low = sizes.min(), let high = sizes.max() else { return }
+            let range = Double(max(high - low, 1))
+            var line = Path()
+            for (index, value) in sizes.enumerated() {
+                let point = CGPoint(x: size.width * Double(index) / Double(sizes.count - 1),
+                                    y: 1 + (size.height - 2) * (1 - Double(value - low) / range))
+                if index == 0 { line.move(to: point) } else { line.addLine(to: point) }
+            }
+            context.stroke(line, with: .color(.series1), lineWidth: 1.5)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -124,7 +250,8 @@ struct ChangesView: View {
                     .width(130)
                     TableColumn("Now") { row in Text(formatBytes(row.change.after)).monospacedDigit() }.width(90)
                     TableColumn("Before") { row in
-                        Text(row.change.before == 0 ? "new" : formatBytes(row.change.before)).monospacedDigit().foregroundStyle(.secondary)
+                        // No earlier size means new, or too small to have a history.
+                        Text(row.change.before == 0 ? "< 1 MB" : formatBytes(row.change.before)).monospacedDigit().foregroundStyle(.secondary)
                     }
                     .width(90)
                 }

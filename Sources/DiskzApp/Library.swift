@@ -53,6 +53,40 @@ final class Library {
         (try? store?.children(of: path, atScan: newerScan, since: olderScan == newerScan ? nil : olderScan)) ?? []
     }
 
+    struct Grower: Identifiable {
+        let change: Change
+        /// Known sizes at the scans since the baseline, oldest first.
+        let sizes: [Int64]
+        let pattern: GrowthPattern?
+        /// Another listed folder that contains this one; its gain already includes this row's.
+        var inside: String?
+        var id: String { change.path }
+    }
+
+    struct Growers {
+        let baseline: ScanInfo
+        /// False when the history is shorter than the window asked for.
+        let coversWindow: Bool
+        let latest: ScanInfo
+        let rows: [Grower]
+    }
+
+    /// Folders that grew between the baseline for `window` (nil: the oldest scan) and the latest scan, largest first.
+    func growers(window: TimeInterval?) -> Growers? {
+        guard let latest, let baseline = window.map({ Growth.baseline(in: scans, window: $0) }) ?? (scans.count >= 2 ? scans.first : nil)
+        else { return nil }
+        let changes = ((try? store?.changes(from: baseline.id, to: latest.id, limit: 2000)) ?? [])
+            .filter { $0.delta > 0 }.prefix(50)
+        let rows = changes.map { change in
+            let sizes = history(of: change.path).filter { $0.scan >= baseline.id }.compactMap(\.alloc)
+            let containers = changes.map(\.path).filter { change.path.hasPrefix($0 + "/") }
+            return Grower(change: change, sizes: sizes, pattern: Growth.pattern(of: sizes),
+                          inside: containers.max { $0.count < $1.count })
+        }
+        return Growers(baseline: baseline, coversWindow: window.map { Growth.coversWindow(baseline, latest: latest, window: $0) } ?? true,
+                       latest: latest, rows: Array(rows))
+    }
+
     func history(of path: String) -> [HistoryPoint] { (try? store?.history(of: path)) ?? [] }
     func samples() -> [DiskSample] { (try? store?.samples()) ?? [] }
     func unknownDirectories() -> [String] { (try? store?.unknownDirectories(atScan: latest?.id ?? 0)) ?? [] }

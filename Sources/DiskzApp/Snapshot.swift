@@ -20,10 +20,15 @@ enum Snapshot {
             let root = try Store(path: database).scans().last?.root ?? AppModel.root
             // Query times on this database, as the window would run them.
             let probe = Library(databasePath: database, root: root)
-            for (name, query) in [("changes", { _ = probe.changes() }), ("browser", { _ = probe.children(of: root) })] {
+            for (name, query) in [("growers", { _ = probe.growers(window: 7 * 86_400) }), ("changes", { _ = probe.changes() }),
+                                  ("browser", { _ = probe.children(of: root) })] {
                 let start = Date()
                 query()
                 note(String(format: "query %@: %.0f ms", name, Date().timeIntervalSince(start) * 1000))
+            }
+            for (name, window) in [("last day", 86_400.0), ("7 days", 7 * 86_400), ("30 days", 30 * 86_400), ("all history", nil)] as [(String, TimeInterval?)] {
+                let growers = probe.growers(window: window)
+                note("growers \(name): baseline \(growers.map { formatDate($0.baseline.startedAt) } ?? "none"), \(growers?.rows.count ?? 0) rows")
             }
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)

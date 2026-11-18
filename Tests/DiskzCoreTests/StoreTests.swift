@@ -111,8 +111,8 @@ import Testing
         #expect(changes.count == 1)
     }
 
-    /// A new tree with many subfolders: the new top folder ranks first, its subfolders follow.
-    @Test func changesListNewTreeTopFolderFirst() throws {
+    /// A tree that is entirely new is listed as its top folder only; its subfolders are implied.
+    @Test func newTreeIsListedAsItsTopFolderOnly() throws {
         let f = try baseFixture()
         let s = try f.store()
         let first = try s.record(try f.scan())
@@ -122,10 +122,46 @@ import Testing
         let second = try s.record(try f.scan())
 
         let changes = try s.changes(from: first, to: second)
-        #expect(changes.first?.path == f.path("fresh"))
+        #expect(changes.map(\.path) == [f.path("fresh")])
         #expect(changes.first?.delta == Int64(20 * MB))
-        #expect(changes.count == 11)
-        #expect(!changes.contains { $0.path == f.root })
+        #expect(changes.first?.before == 0)
+    }
+
+    /// A new folder whose content sits in one nested subfolder still shows up, as its top folder.
+    @Test func newNestedChainIsListedAsItsTopFolder() throws {
+        let f = try baseFixture()
+        let s = try f.store()
+        let first = try s.record(try f.scan())
+        try f.write("fresh/deep/deeper/file", bytes: 4 * MB)
+        let second = try s.record(try f.scan())
+
+        #expect(try s.changes(from: first, to: second).map(\.path) == [f.path("fresh")])
+    }
+
+    /// The same for a tree that is entirely gone.
+    @Test func deletedTreeIsListedAsItsTopFolderOnly() throws {
+        let f = try baseFixture()
+        let s = try f.store()
+        let first = try s.record(try f.scan())
+        try f.remove("a") // holds a/file and a/b/file
+        let second = try s.record(try f.scan())
+
+        let changes = try s.changes(from: first, to: second)
+        #expect(changes.map(\.path) == [f.path("a")])
+        #expect(changes.first?.delta == -Int64(4 * MB))
+        #expect(changes.first?.after == 0)
+    }
+
+    /// A folder that grew is still listed next to a new subfolder inside it when neither explains the other.
+    @Test func growthInsideAnExistingFolderKeepsBothRows() throws {
+        let f = try baseFixture()
+        let s = try f.store()
+        let first = try s.record(try f.scan())
+        try f.write("a/more", bytes: 4 * MB)
+        try f.write("a/fresh/file", bytes: 4 * MB)
+        let second = try s.record(try f.scan())
+
+        #expect(try s.changes(from: first, to: second).map(\.path) == [f.path("a"), f.path("a/fresh")])
     }
 
     @Test func changesListShrinkage() throws {
