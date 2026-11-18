@@ -3,7 +3,12 @@ import SwiftUI
 
 @main
 struct DiskzApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
+
+    init() {
+        Snapshot.runIfRequested() // development aid; exits if it was asked for
+        _model = State(initialValue: AppModel())
+    }
 
     var body: some Scene {
         MenuBarExtra {
@@ -16,13 +21,29 @@ struct DiskzApp: App {
                 Image(systemName: "internaldrive")
             }
         }
+        Window("diskz", id: "main") {
+            if let library = model.library {
+                MainWindow(library: library, model: model)
+            } else {
+                Text("The database could not be opened.").padding(40)
+            }
+        }
+        .defaultSize(width: 1000, height: 680)
     }
 }
 
 struct MenuView: View {
     @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button("Open diskz") {
+            openWindow(id: "main")
+            // The app has no Dock icon, so it must be brought forward explicitly.
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            Log.write("window opened, app active: \(NSApplication.shared.isActive)")
+        }
+        Divider()
         Text(model.status)
         if let scan = model.lastScan {
             Text("Last scan: \(AppModel.format(scan.finishedAt))")

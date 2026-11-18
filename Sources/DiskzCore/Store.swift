@@ -21,6 +21,22 @@ public struct DirSize: Sendable {
     public var unknown: Bool
 }
 
+/// A directory's size at one scan; `alloc` is nil while the directory was unreadable.
+public struct HistoryPoint: Sendable {
+    public var scan: Int64
+    public var date: Date
+    public var alloc: Int64?
+}
+
+/// A subdirectory with its change since an earlier scan. `delta` is nil when there is no
+/// comparison, or when the directory only became readable or unreadable in between.
+public struct ChildChange: Sendable {
+    public var path: String
+    public var alloc: Int64
+    public var unknown: Bool
+    public var delta: Int64?
+}
+
 public struct DiskSample: Sendable {
     public var at: Date
     public var usage: DiskUsage
@@ -227,15 +243,72 @@ public final class Store {
     /// Direct subdirectories that exist at a scan, largest first.
     public func children(of path: String, atScan scan: Int64) throws -> [DirSize] {
         guard let id = try dirID(forPath: path) else { return [] }
-        return try db.query("""
-            SELECT d.name, s.alloc, s.logical, s.files, s.unknown FROM dirs d
+        return try childRows(of: id, atScan: scan).map {
+            DirSize(path: joinPath(path, [$0.name]), alloc: $0.alloc, logical: $0.logical, files: $0.files, unknown: $0.unknown)
+        }
+    }
+
+    private struct ChildRow {
+        var id: Int64
+        var name: String
+        var alloc: Int64
+        var logical: Int64
+        var files: Int64
+        var unknown: Bool
+    }
+
+    private func childRows(of id: Int64, atScan scan: Int64) throws -> [ChildRow] {
+        try db.query("""
+            SELECT d.id, d.name, s.alloc, s.logical, s.files, s.unknown FROM dirs d
             JOIN sizes s ON s.dir_id = d.id
              AND s.scan_id = (SELECT MAX(scan_id) FROM sizes WHERE dir_id = d.id AND scan_id <= ?2)
             WHERE d.parent_id = ?1 AND (s.alloc > 0 OR s.unknown = 1)
             ORDER BY s.alloc DESC, d.name
             """, [id, scan]) { row in
-            DirSize(path: joinPath(path, [row.text(0)]), alloc: row.int(1), logical: row.int(2),
-                    files: row.int(3), unknown: row.int(4) != 0)
+            ChildRow(id: row.int(0), name: row.text(1), alloc: row.int(2), logical: row.int(3),
+                     files: row.int(4), unknown: row.int(5) != 0)
+        }
+    }
+
+    /// One point per scan of the directory's root, oldest first; empty if the directory has no history.
+    public func history(of path: String) throws -> [HistoryPoint] {
+        guard let id = try dirID(forPath: path), let root = try rootPath(containing: path) else { return [] }
+        let rows = try db.query("SELECT scan_id, alloc, unknown FROM sizes WHERE dir_id = ? ORDER BY scan_id", [id]) {
+            ($0.int(0), $0.int(1), $0.int(2) != 0)
+        }
+        var next = 0
+        var current: Int64? = 0 // before its first row a directory counts as 0
+        return try scans().filter { $0.root == root }.map { scan in
+            while next < rows.count, rows[next].0 <= scan.id {
+                current = rows[next].2 ? nil : rows[next].1
+                next += 1
+            }
+            return HistoryPoint(scan: scan.id, date: scan.startedAt, alloc: current)
+        }
+    }
+
+    /// Paths of the directories that could not be read at a scan.
+    public func unknownDirectories(atScan scan: Int64) throws -> [String] {
+        guard let root = try scans().first(where: { $0.id == scan })?.root,
+              let rootID = try dirID(forPath: root) else { return [] }
+        var parentOf: [Int64: Int64] = [:], nameOf: [Int64: String] = [:]
+        _ = try db.query("SELECT id, parent_id, name FROM dirs") { row in
+            parentOf[row.int(0)] = row.int(1)
+            nameOf[row.int(0)] = row.text(2)
+        }
+        let c = Comparison(entries: [:], inaccessible: [], parentOf: parentOf, nameOf: nameOf)
+        return try db.query("""
+            SELECT s.dir_id FROM sizes s
+            WHERE s.unknown = 1 AND s.scan_id = (SELECT MAX(scan_id) FROM sizes WHERE dir_id = s.dir_id AND scan_id <= ?)
+            """, [scan]) { $0.int(0) }
+            .filter { (c.ancestors(of: $0).last ?? $0) == rootID }
+            .map { c.path(of: $0) }
+            .sorted()
+    }
+
+    private func rootPath(containing path: String) throws -> String? {
+        try db.query("SELECT name FROM dirs WHERE parent_id = 0") { $0.text(0) }.first { root in
+            path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
         }
     }
 
@@ -264,39 +337,56 @@ public final class Store {
     /// - A directory that merely became readable or unreadable is not a change, and its size is
     ///   taken out of its ancestors' changes.
     public func changes(from: Int64, to: Int64, limit: Int = 50) throws -> [Change] {
+        let c = try comparison(from: from, to: to)
+        // Pass-through ancestors: one child explains at least 80 % of the change.
+        // (A folder hidden here still hides its own parent, so whole chains collapse.)
+        var hidden = c.inaccessible
+        for (id, entry) in c.entries where !c.inaccessible.contains(id) {
+            guard let parent = c.parentOf[id], let parentEntry = c.entries[parent] else { continue }
+            let (child, whole) = (entry.delta, parentEntry.delta)
+            if child != 0, (child > 0) == (whole > 0), abs(child) * 5 >= abs(whole) * 4 {
+                hidden.insert(parent)
+            }
+        }
+        return c.entries
+            .filter { !hidden.contains($0.key) && $0.value.delta != 0 }
+            .map { Change(path: c.path(of: $0.key), before: $0.value.before, after: $0.value.after) }
+            .sorted { abs($0.delta) != abs($1.delta) ? abs($0.delta) > abs($1.delta) : $0.path < $1.path }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// Direct subdirectories at scan `scan`, largest first, each with its change since scan `since`.
+    public func children(of path: String, atScan scan: Int64, since: Int64?) throws -> [ChildChange] {
+        guard let id = try dirID(forPath: path) else { return [] }
+        let comparison = try since.map { try self.comparison(from: $0, to: scan) }
+        return try childRows(of: id, atScan: scan).map { row in
+            var delta: Int64?
+            if let comparison {
+                if comparison.inaccessible.contains(row.id) {
+                    delta = nil
+                } else {
+                    delta = comparison.entries[row.id]?.delta ?? 0
+                }
+            }
+            return ChildChange(path: joinPath(path, [row.name]), alloc: row.alloc, unknown: row.unknown, delta: delta)
+        }
+    }
+
+    private struct Comparison {
         struct Entry {
             var before: Int64
             var after: Int64
             var accessChanged: Bool
             var delta: Int64 { after - before }
         }
-        let found = try db.query("SELECT id, root FROM scans WHERE id IN (?1, ?2)", [from, to]) { ($0.int(0), $0.text(1)) }
-        guard Set(found.map(\.0)) == [from, to] else {
-            throw StoreError(description: "scan \(from) or \(to) does not exist")
-        }
-        guard Set(found.map(\.1)).count == 1, let root = found.first?.1 else {
-            throw StoreError(description: "scans \(from) and \(to) cover different folders")
-        }
-        var entries: [Int64: Entry] = [:]
-        _ = try db.query("""
-            WITH changed AS (SELECT DISTINCT dir_id FROM sizes WHERE scan_id > ?1 AND scan_id <= ?2)
-            SELECT c.dir_id, b.alloc, b.unknown, a.alloc, a.unknown FROM changed c
-            LEFT JOIN sizes b ON b.dir_id = c.dir_id
-             AND b.scan_id = (SELECT MAX(scan_id) FROM sizes WHERE dir_id = c.dir_id AND scan_id <= ?1)
-            LEFT JOIN sizes a ON a.dir_id = c.dir_id
-             AND a.scan_id = (SELECT MAX(scan_id) FROM sizes WHERE dir_id = c.dir_id AND scan_id <= ?2)
-            """, [from, to]) { row in
-            entries[row.int(0)] = Entry(before: row.int(1), after: row.int(3),
-                                        accessChanged: (row.int(2) != 0) != (row.int(4) != 0))
-        }
-        if entries.isEmpty { return [] }
+        /// Directories whose value changed between the two scans, access changes already taken out of `before`.
+        var entries: [Int64: Entry]
+        /// Directories that became readable or unreadable, and everything below them.
+        var inaccessible: Set<Int64>
+        var parentOf: [Int64: Int64]
+        var nameOf: [Int64: String]
 
-        var parentOf: [Int64: Int64] = [:]
-        var nameOf: [Int64: String] = [:]
-        _ = try db.query("SELECT id, parent_id, name FROM dirs") { row in
-            parentOf[row.int(0)] = row.int(1)
-            nameOf[row.int(0)] = row.text(2)
-        }
         func ancestors(of id: Int64) -> [Int64] {
             var out: [Int64] = []
             var current = parentOf[id] ?? 0
@@ -307,42 +397,52 @@ public final class Store {
             return out
         }
 
-        // Scans of other folders may lie between the two; their directories are not part of this comparison.
-        let rootID = try db.query("SELECT id FROM dirs WHERE parent_id = 0 AND name = ?", [root]) { $0.int(0) }.first
-        entries = entries.filter { (ancestors(of: $0.key).last ?? $0.key) == rootID }
-
-        // Access changes: drop the subtree and treat its size as if it had been there before.
-        var hidden = Set<Int64>()
-        for (id, entry) in entries {
-            let above = ancestors(of: id)
-            if above.contains(where: { entries[$0]?.accessChanged == true }) {
-                hidden.insert(id)
-            } else if entry.accessChanged {
-                hidden.insert(id)
-                for ancestor in above { entries[ancestor]?.before += entry.delta }
-            }
-        }
-        // Pass-through ancestors: one child explains at least 80 % of the change.
-        // (A folder hidden here still hides its own parent, so whole chains collapse.)
-        let inaccessible = hidden
-        for (id, entry) in entries where !inaccessible.contains(id) {
-            guard let parent = parentOf[id], let parentEntry = entries[parent] else { continue }
-            let (child, whole) = (entry.delta, parentEntry.delta)
-            if child != 0, (child > 0) == (whole > 0), abs(child) * 5 >= abs(whole) * 4 {
-                hidden.insert(parent)
-            }
-        }
-
         func path(of id: Int64) -> String {
             let chain = ([id] + ancestors(of: id)).reversed().map { nameOf[$0] ?? "?" }
             return joinPath(chain[0], Array(chain.dropFirst()))
         }
-        return entries
-            .filter { !hidden.contains($0.key) && $0.value.delta != 0 }
-            .map { Change(path: path(of: $0.key), before: $0.value.before, after: $0.value.after) }
-            .sorted { abs($0.delta) != abs($1.delta) ? abs($0.delta) > abs($1.delta) : $0.path < $1.path }
-            .prefix(limit)
-            .map { $0 }
+    }
+
+    private func comparison(from: Int64, to: Int64) throws -> Comparison {
+        let found = try db.query("SELECT id, root FROM scans WHERE id IN (?1, ?2)", [from, to]) { ($0.int(0), $0.text(1)) }
+        guard Set(found.map(\.0)) == [from, to] else {
+            throw StoreError(description: "scan \(from) or \(to) does not exist")
+        }
+        guard Set(found.map(\.1)).count == 1, let root = found.first?.1 else {
+            throw StoreError(description: "scans \(from) and \(to) cover different folders")
+        }
+        var c = Comparison(entries: [:], inaccessible: [], parentOf: [:], nameOf: [:])
+        _ = try db.query("""
+            WITH changed AS (SELECT DISTINCT dir_id FROM sizes WHERE scan_id > ?1 AND scan_id <= ?2)
+            SELECT c.dir_id, b.alloc, b.unknown, a.alloc, a.unknown FROM changed c
+            LEFT JOIN sizes b ON b.dir_id = c.dir_id
+             AND b.scan_id = (SELECT MAX(scan_id) FROM sizes WHERE dir_id = c.dir_id AND scan_id <= ?1)
+            LEFT JOIN sizes a ON a.dir_id = c.dir_id
+             AND a.scan_id = (SELECT MAX(scan_id) FROM sizes WHERE dir_id = c.dir_id AND scan_id <= ?2)
+            """, [from, to]) { row in
+            c.entries[row.int(0)] = Comparison.Entry(before: row.int(1), after: row.int(3),
+                                                     accessChanged: (row.int(2) != 0) != (row.int(4) != 0))
+        }
+        if c.entries.isEmpty { return c }
+        _ = try db.query("SELECT id, parent_id, name FROM dirs") { row in
+            c.parentOf[row.int(0)] = row.int(1)
+            c.nameOf[row.int(0)] = row.text(2)
+        }
+        // Scans of other folders may lie between the two; their directories are not part of this comparison.
+        let rootID = try db.query("SELECT id FROM dirs WHERE parent_id = 0 AND name = ?", [root]) { $0.int(0) }.first
+        c.entries = c.entries.filter { (c.ancestors(of: $0.key).last ?? $0.key) == rootID }
+
+        // Access changes: drop the subtree and treat its size as if it had been there before.
+        for (id, entry) in c.entries {
+            let above = c.ancestors(of: id)
+            if above.contains(where: { c.entries[$0]?.accessChanged == true }) {
+                c.inaccessible.insert(id)
+            } else if entry.accessChanged {
+                c.inaccessible.insert(id)
+                for ancestor in above { c.entries[ancestor]?.before += entry.delta }
+            }
+        }
+        return c
     }
 
     // MARK: Retention

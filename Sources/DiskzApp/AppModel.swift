@@ -26,6 +26,8 @@ final class AppModel {
     private var ticks = 0
     private let policy: SchedulePolicy
     private let databasePath: String?
+    /// What the window shows; nil if the database cannot be opened.
+    let library: Library?
 
     init() {
         // Both values can be changed with `defaults write com.github.tillg.diskz <key> <number>`.
@@ -35,6 +37,7 @@ final class AppModel {
         if defaults.object(forKey: "minIntervalHours") != nil { policy.minInterval = defaults.double(forKey: "minIntervalHours") * 3600 }
         self.policy = policy
         databasePath = try? Store.defaultPath
+        library = databasePath.map { Library(databasePath: $0, root: Self.root) }
 
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
         Log.write("launched, build \(build), Full Disk Access \(fullDiskAccess ? "granted" : "denied"), "
@@ -166,6 +169,7 @@ final class AppModel {
     }
 
     private func reloadLastScan() {
+        library?.reload()
         guard let databasePath else { return }
         lastScan = try? Store(path: databasePath).lastScan(ofRoot: Self.root)
     }

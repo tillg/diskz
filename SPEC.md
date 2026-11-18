@@ -106,7 +106,7 @@ A normal window, opened from a **menu bar item** that shows the last scan time, 
 |---|---|
 | How full is the disk, and how did that develop? | **Overview:** used and free space over time, with the "Not attributed" share. |
 | What grew? | **Changes:** pick two dates; lists the top growing and shrinking directories with their delta. This is the main view. A directory is left out when one subdirectory explains at least 80 % of its change, so the list names the folder that grew, not every parent up to `/`. A folder that merely became readable (e.g. after granting Full Disk Access) is not listed as growth. |
-| Where is the space now? | **Browser:** directory outline sortable by size and by change since a chosen date. |
+| Where is the space now? | **Browser:** a table of subfolders, sortable by size and by change since a chosen scan; double-click opens a folder. (A table you drill into, not a tree outline: simpler, and enough to answer the question.) |
 | When did this folder grow? | **Directory detail:** size-over-time chart for one directory, with "Reveal in Finder". |
 | Is scanning working? | **Status:** last and next scan, duration, unreadable directories, database size. |
 
@@ -171,10 +171,26 @@ Built: `Diskz.app` (menu bar only), idle scheduler, pause/resume/cancel in the s
 | Full app scan | Pass. With Full Disk Access, started by the idle rule (with a 3-second test threshold) and paused 9 times by real input: 1,025,317 folders, 270 unreadable, 574 GB scanned (decimal). Walking took 569 s of wall time including pauses; the final save, which cannot pause, took 0.9 s. The CLI reads the result from the shared database. |
 | A8 | Partly. The scanner reports unreadable folders as unknown (milestone 1) and the menu shows their count, but a complete app scan without Full Disk Access was not observed, because access was granted while it ran. |
 | Start at login | Not tested. Needs the toggle switched on and a logout. |
-| Automatic start under the real 5-minute rule | Not observed yet. The first is due after 2026-11-19 13:37; the log will show it. |
+| Automatic start under the real 5-minute rule | Not observed yet. The first is due after 2026-11-19 14:11 (a manual scan at 14:08 moved it); the log will show it. |
 | Failed scans | A scan that fails or is discarded is retried after one hour at the earliest (unit test), so a lasting fault cannot restart it every second. |
 | Menu | The user operated it; "Finish scan now" worked. A stale status line (it did not refresh while the menu was open) was reported and fixed; the fix is not yet confirmed by the user. |
 | Logo | `logo.svg`, supplied by the user. App icon and menu bar icon are rendered from it by `scripts/make-icon.sh`. |
+
+### Milestone 3 results (2026-11-18)
+
+Built: the window with Changes, Browser, Overview and Status, a size-over-time chart per folder, and the queries behind them. 34 automated tests pass.
+
+| Check | Result |
+|---|---|
+| A7 | Pass (automated test from milestone 1): the folder that grew is listed first. |
+| Views render | Checked in snapshots rendered by the app itself, in light and dark, from a real three-scan database, a generated 120-scan history, a one-scan database and an empty one. Seen: Changes with the first 13 rows and the folder chart, Browser with all 11 rows including the unreadable ones, Overview with tiles, legend and labelled line ends, Status with its list, and the "no scan" and "one scan" states. Not seen: rows further down long tables. |
+| Sidebar | Snapshots cannot draw it; its list holds the four sections (row count checked). |
+| No window at launch | Checked: after launching the app, it owns no window until "Open diskz" is chosen. |
+| Access changes | The Browser's change column uses the same rule as Changes (automated test): a folder that only became readable shows "newly readable", and its size is not counted as growth in its parents. |
+| Query time | On the real three-scan database: Changes 128 ms, Browser 95 ms per folder opened. Both run on the main thread; acceptable for now, worth caching if they grow. |
+| Not verified | How the real window looks and opens, and every interaction: double-click to open a folder, sorting, the scan pickers, chart hover, "Reveal in Finder", and refresh when a scan finishes while the window is open. One AppKit warning about the Status table appears in snapshot runs; cause not found. |
+
+Known limit: the per-folder chart shows recorded sizes as they were, so a parent folder jumps when a subfolder becomes readable; only the Changes and Browser columns correct for that.
 
 ## 12. Possible later
 

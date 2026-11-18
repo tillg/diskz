@@ -10,6 +10,15 @@ public struct ScanNode: Sendable {
     public var ownFiles: Int64 = 0
     /// The directory could not be read (completely), so its size is not known.
     public var unknown = false
+
+    public init(parent: Int, name: String, ownAlloc: Int64 = 0, ownLogical: Int64 = 0, ownFiles: Int64 = 0, unknown: Bool = false) {
+        self.parent = parent
+        self.name = name
+        self.ownAlloc = ownAlloc
+        self.ownLogical = ownLogical
+        self.ownFiles = ownFiles
+        self.unknown = unknown
+    }
 }
 
 public struct DirTotals: Sendable, Equatable {
@@ -27,6 +36,15 @@ public struct ScanResult: Sendable {
     public var diskFree: Int64
     /// Directory entries whose attributes could not be read.
     public var entryErrors: Int
+
+    public init(nodes: [ScanNode], startedAt: Date, finishedAt: Date, diskUsed: Int64, diskFree: Int64, entryErrors: Int) {
+        self.nodes = nodes
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.diskUsed = diskUsed
+        self.diskFree = diskFree
+        self.entryErrors = entryErrors
+    }
 
     public var root: String { nodes[0].name }
 

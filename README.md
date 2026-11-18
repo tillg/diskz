@@ -11,7 +11,7 @@ diskz is read-only: it never deletes, moves or cleans up anything.
 |---|---|
 | Scanner, history database, `diskz` command-line tool | Built (milestone 1) |
 | Menu bar app that scans by itself while the Mac is idle | Built (milestone 2) |
-| Window UI with changes over time | Not built yet (milestone 3) |
+| Window with changes over time | Built (milestone 3) |
 
 The design, the decisions taken and the measured results are in [SPEC.md](SPEC.md).
 
@@ -40,7 +40,7 @@ open ~/Applications/Diskz.app
 The logo is `logo.svg`. The app icon and the menu bar icon in `Resources/` are rendered from it
 by `scripts/make-icon.sh` (needs `rsvg-convert`); rerun that only when the logo changes.
 
-Diskz shows its logo in the menu bar and has no window yet. It scans the internal Data
+Diskz shows its logo in the menu bar; "Open diskz" in its menu opens the window. It scans the internal Data
 volume by itself when all of these hold:
 
 - no keyboard or mouse input for 5 minutes
@@ -53,10 +53,26 @@ once the Mac is idle again. Its menu offers:
 
 | Item | What it does |
 |---|---|
+| Open diskz | opens the window |
 | Status lines | what diskz is doing or waiting for, and the result of the last scan |
 | Grant Full Disk Access… | opens the right System Settings pane (shown only while access is missing) |
 | Scan now / Finish scan now | scans regardless of the idle conditions |
 | Start at login | off until you switch it on |
+
+The window has four sections:
+
+| Section | Answers |
+|---|---|
+| Changes | What grew or shrank between two scans you pick? Largest change first. |
+| Browser | Where is the space now? A table of subfolders with size and change; double-click to open a folder. |
+| Overview | How full is the disk, and how did that develop? Includes the "not attributed" share. |
+| Status | Is scanning working? Last scan, database size, and the folders that could not be read. |
+
+Selecting a folder in Changes or Browser shows its size over time and a "Reveal in Finder" button.
+Paths are shown without the `/System/Volumes/Data` prefix where that names the same folder.
+
+For development, `Diskz --snapshot DIR [--db FILE | --demo SCANS]` renders every section to PNG
+files and exits, without scanning or touching the real database.
 
 Details:
 
