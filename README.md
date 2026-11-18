@@ -64,14 +64,14 @@ The window has four sections:
 | Section | Answers |
 |---|---|
 | Changes | What grew or shrank between two scans you pick? Largest change first. |
-| Browser | Where is the space now? A table of subfolders with size and change; double-click to open a folder. |
+| Browser | Where is the space now? A table of subfolders with size and change; double-click to open a folder, back and forward buttons (⌘[ and ⌘]) as in Finder. |
 | Overview | How full is the disk, and how did that develop? Includes the "not attributed" share. |
-| Status | Is scanning working? Last scan, database size, and the folders that could not be read. |
+| Status | Is scanning working? Last scan, database size, Full Disk Access (with a button to grant it), and the folders that could not be read. |
 
 Selecting a folder in Changes or Browser shows its size over time and a "Reveal in Finder" button.
 Paths are shown without the `/System/Volumes/Data` prefix where that names the same folder.
 
-For development, `Diskz --snapshot DIR [--db FILE | --demo SCANS]` renders every section to PNG
+For development, `Diskz --snapshot DIR [--db FILE | --demo SCANS] [--no-access]` renders every section to PNG
 files and exits, without scanning or touching the real database.
 
 Details:

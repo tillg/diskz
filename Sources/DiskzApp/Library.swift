@@ -11,6 +11,8 @@ final class Library {
     private(set) var revision = 0
     var fromScan: Int64 = 0
     var toScan: Int64 = 0
+    /// Where the browser is, kept here so it survives switching to another section.
+    var navigation: NavigationHistory
     /// True until the user picks scans; while true, both sides move on to each new scan.
     var followsLatest = true
     private let store: Store?
@@ -18,6 +20,7 @@ final class Library {
     init(databasePath: String, root: String) {
         self.databasePath = databasePath
         self.root = root
+        navigation = NavigationHistory(start: root)
         store = try? Store(path: databasePath)
         reload()
     }

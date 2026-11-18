@@ -19,6 +19,10 @@ struct MainWindow: View {
     let library: Library
     let model: AppModel?
     @State var section: Section = .changes
+    /// Snapshot mode has no running app to ask, so it can state that access is missing.
+    var assumeNoAccess = false
+
+    private var accessMissing: Bool { model.map { !$0.fullDiskAccess } ?? assumeNoAccess }
 
     var body: some View {
         NavigationSplitView {
@@ -36,7 +40,7 @@ struct MainWindow: View {
                     case .changes: ChangesView(library: library)
                     case .browser: BrowserView(library: library)
                     case .overview: OverviewView(library: library)
-                    case .status: StatusView(library: library, model: model)
+                    case .status: StatusView(library: library, model: model, accessMissing: accessMissing)
                     }
                 }
             }
@@ -141,7 +145,6 @@ struct ChangesView: View {
 
 struct BrowserView: View {
     let library: Library
-    @State private var path: String
     @State private var rows: [Row] = []
     @State private var selection: String?
     @State private var order = [KeyPathComparator(\Row.alloc, order: .reverse)]
@@ -159,10 +162,7 @@ struct BrowserView: View {
         var path: String, from: Int64, to: Int64, revision: Int
     }
 
-    init(library: Library) {
-        self.library = library
-        _path = State(initialValue: library.root)
-    }
+    private var path: String { library.navigation.current }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -194,13 +194,26 @@ struct BrowserView: View {
                     .width(130)
                 }
                 .contextMenu(forSelectionType: String.self) { _ in } primaryAction: { ids in
-                    if let first = ids.first { path = first }
+                    if let first = ids.first { library.navigation.open(first) }
                 }
                 .onChange(of: order) { rows.sort(using: order) }
                 if let selection {
                     Divider()
                     FolderDetail(library: library, path: selection).frame(height: 230)
                 }
+            }
+        }
+        .toolbar {
+            // Back and forward as in Finder, with the same shortcuts.
+            ToolbarItemGroup(placement: .navigation) {
+                Button { library.navigation.goBack() } label: { Label("Back", systemImage: "chevron.left") }
+                    .disabled(!library.navigation.canGoBack)
+                    .keyboardShortcut("[", modifiers: .command)
+                    .help("Back to the previous folder (⌘[)")
+                Button { library.navigation.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
+                    .disabled(!library.navigation.canGoForward)
+                    .keyboardShortcut("]", modifiers: .command)
+                    .help("Forward to the next folder (⌘])")
             }
         }
         .task(id: Key(path: path, from: library.fromScan, to: library.toScan, revision: library.revision)) {
@@ -217,10 +230,10 @@ struct BrowserView: View {
         let parts = path.dropFirst(library.root.count).split(separator: "/").map(String.init)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                Button(library.display(library.root)) { path = library.root }
+                Button(library.display(library.root)) { library.navigation.open(library.root) }
                 ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                    Button(part) { path = library.root + "/" + parts[...index].joined(separator: "/") }
+                    Button(part) { library.navigation.open(library.root + "/" + parts[...index].joined(separator: "/")) }
                 }
                 Text("Double-click a folder to open it").font(.caption).foregroundStyle(.secondary).padding(.leading, 12)
             }
@@ -426,6 +439,7 @@ struct OverviewView: View {
 struct StatusView: View {
     let library: Library
     let model: AppModel?
+    let accessMissing: Bool
     @State private var unreadable: [String] = []
 
     private struct Unreadable: Identifiable {
@@ -439,9 +453,17 @@ struct StatusView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 16, verticalSpacing: 8) {
-                if let model {
-                    row("Now", model.status)
-                    row("Full Disk Access", model.fullDiskAccess ? "Granted" : "Missing: protected folders are unreadable")
+                if let model { row("Now", model.status) }
+                GridRow {
+                    Text("Full Disk Access").foregroundStyle(.secondary)
+                    if accessMissing {
+                        HStack {
+                            Text("Missing: Mail, Messages, Safari and other apps’ data cannot be read and count as “not attributed”.")
+                            Button("Open Settings…") { FullDiskAccess.openSettings() }
+                        }
+                    } else {
+                        Text("Granted")
+                    }
                 }
                 if let scan = library.latest {
                     row("Last scan", "\(formatDate(scan.startedAt)), took \(duration(scan))")

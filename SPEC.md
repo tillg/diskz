@@ -40,7 +40,7 @@ The directory total will **not** equal the "used" figure in Finder. The gap cons
 
 Scanning the whole volume needs **Full Disk Access**. The grant belongs to the binary that does the scanning.
 
-- **First launch:** a screen explains why, opens the right System Settings pane, and detects when access has been granted.
+- **When access is missing:** the menu offers "Grant Full Disk Access…", and the window's Status section explains what cannot be read, with a button that opens the right System Settings pane. The app notices the grant by itself. (As built; there is no separate first-launch screen.)
 - **Limits of the grant:** Full Disk Access is not root. Folders closed by ordinary file permissions, such as other users' home folders and root-only system folders, stay unknown either way. See decision 7.
 - **Without the grant:** diskz still scans everything it can read and marks protected folders (Mail, Messages, Safari, other apps' containers) as unknown.
 - **Development concern:** the grant is tied to the code signature. With ad-hoc signing every rebuild would probably lose it, so builds need a stable signing identity. No Apple source was found for this **(to verify by experiment before milestone 2)**. See decision 1 and section 14.

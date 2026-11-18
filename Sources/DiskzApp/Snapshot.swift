@@ -2,7 +2,7 @@ import AppKit
 import DiskzCore
 import SwiftUI
 
-/// Development aid: `Diskz --snapshot OUTDIR [--db FILE | --demo SCANS]` renders every section of
+/// Development aid: `Diskz --snapshot OUTDIR [--db FILE | --demo SCANS] [--no-access]` renders every section of
 /// the window to PNG files (light and dark) and exits. It only reads the given database and never
 /// starts the scheduler, so the UI can be checked without touching the real scan history.
 enum Snapshot {
@@ -34,7 +34,8 @@ enum Snapshot {
                     note("rendering \(section.rawValue) \(name)")
                     let library = Library(databasePath: database, root: root)
                     // An offscreen capture has no window backdrop, so give the content one.
-                    let host = NSHostingView(rootView: MainWindow(library: library, model: nil, section: section)
+                    let host = NSHostingView(rootView: MainWindow(library: library, model: nil, section: section,
+                                                                  assumeNoAccess: args.contains("--no-access"))
                         .background(Color(nsColor: .windowBackgroundColor)))
                     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
                                           styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
