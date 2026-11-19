@@ -60,7 +60,20 @@ final class Library {
         let pattern: GrowthPattern?
         /// Another listed folder that contains this one; its gain already includes this row's.
         var inside: String?
+        /// How many listed folders contain this one; rows are indented by it.
+        var depth = 0
         var id: String { change.path }
+
+        /// In words, how the folder grew.
+        var how: String {
+            if change.before == 0 { return "was < 1 MB" } // new, or too small to have a history
+            switch pattern {
+            case .jump: return "one jump"
+            case .steady: return "steady"
+            case .fluctuating: return "up and down"
+            case nil: return ""
+            }
+        }
     }
 
     struct Growers {
@@ -68,6 +81,8 @@ final class Library {
         /// False when the history is shorter than the window asked for.
         let coversWindow: Bool
         let latest: ScanInfo
+        /// The whole volume's gain; shown in the header, not in the ranking.
+        let total: Int64?
         let rows: [Grower]
     }
 
@@ -75,16 +90,39 @@ final class Library {
     func growers(window: TimeInterval?) -> Growers? {
         guard let latest, let baseline = window.map({ Growth.baseline(in: scans, window: $0) }) ?? (scans.count >= 2 ? scans.first : nil)
         else { return nil }
-        let changes = ((try? store?.changes(from: baseline.id, to: latest.id, limit: 2000)) ?? [])
-            .filter { $0.delta > 0 }.prefix(50)
+        let all = (try? store?.changes(from: baseline.id, to: latest.id, limit: 2000)) ?? []
+        let changes = all.filter { $0.delta > 0 && $0.path != root }.prefix(50)
         let rows = changes.map { change in
             let sizes = history(of: change.path).filter { $0.scan >= baseline.id }.compactMap(\.alloc)
             let containers = changes.map(\.path).filter { change.path.hasPrefix($0 + "/") }
             return Grower(change: change, sizes: sizes, pattern: Growth.pattern(of: sizes),
-                          inside: containers.max { $0.count < $1.count })
+                          inside: containers.max { $0.count < $1.count }, depth: containers.count)
         }
         return Growers(baseline: baseline, coversWindow: window.map { Growth.coversWindow(baseline, latest: latest, window: $0) } ?? true,
-                       latest: latest, rows: Array(rows))
+                       latest: latest, total: all.first { $0.path == root }?.delta, rows: Array(rows))
+    }
+
+    struct RecentFolder: Identifiable {
+        let row: RecentRow
+        /// Another listed folder that contains this one; its figure already includes this row's.
+        let inside: String?
+        /// How many listed folders contain this one; rows are indented by it.
+        let depth: Int
+        var id: String { row.path }
+    }
+
+    /// The scan the "recently added" figures come from; nil until a scan has collected them.
+    func recentFigures() -> RecentFigures? { (try? store?.recentFigures(ofRoot: root)) ?? nil }
+
+    /// The whole volume's figure is the grand total; it goes into the header, not into the ranking.
+    func recentlyAdded(days: Int) -> (total: Int64?, folders: [RecentFolder]) {
+        let all = (try? store?.recentlyAdded(ofRoot: root, days: days)) ?? []
+        let rows = all.filter { $0.path != root }
+        let folders = rows.map { row in
+            let containers = rows.map(\.path).filter { row.path.hasPrefix($0 + "/") }
+            return RecentFolder(row: row, inside: containers.max { $0.count < $1.count }, depth: containers.count)
+        }
+        return (all.first { $0.path == root }?.added, folders)
     }
 
     func history(of path: String) -> [HistoryPoint] { (try? store?.history(of: path)) ?? [] }

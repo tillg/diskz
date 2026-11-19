@@ -11,7 +11,8 @@ BIN="$(swift build -c release --show-bin-path)/DiskzApp"
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Diskz"
-cp Resources/AppIcon.icns Resources/MenuIcon.png "Resources/MenuIcon@2x.png" "$APP/Contents/Resources/"   # from logo.svg, see scripts/make-icon.sh
+cp Resources/AppIcon.icns Resources/MenuIcon.png "Resources/MenuIcon@2x.png" \
+    Resources/MenuIconTemplate.png "Resources/MenuIconTemplate@2x.png" "$APP/Contents/Resources/"   # from logo.svg, see scripts/make-icon.sh
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

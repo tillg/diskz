@@ -93,8 +93,10 @@ final class Database {
 
     var lastInsertID: Int64 { sqlite3_last_insert_rowid(handle) }
 
-    func transaction(_ body: () throws -> Void) throws {
-        try exec("BEGIN")
+    /// `immediate` takes the write lock at once, so everything read inside stays true until the commit;
+    /// another connection that wants to write waits (up to the busy timeout) instead of failing later.
+    func transaction(immediate: Bool = false, _ body: () throws -> Void) throws {
+        try exec(immediate ? "BEGIN IMMEDIATE" : "BEGIN")
         do {
             try body()
             try exec("COMMIT")

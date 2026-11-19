@@ -248,6 +248,36 @@ import Testing
         #expect(try s.changes(from: pair.from, to: pair.to).map(\.path) == [f.path("c")])
     }
 
+    /// The app and the command-line tool may finish a scan at the same moment; both must be saved.
+    @Test func twoProcessesCanRecordAtTheSameTime() throws {
+        let f = try Fixture()
+        for i in 0..<300 {
+            try f.write("d\(i)/sub/file", bytes: 3000)
+        }
+        let result = try f.scan()
+        let path = f.path("") + "-shared.sqlite"
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + suffix) } }
+        // Two connections, as two processes would have; a cutoff of 0 gives every folder a history.
+        let stores = [try Store(path: path, cutoff: 0), try Store(path: path, cutoff: 0)]
+
+        for round in 0..<5 {
+            let failures = Failures()
+            DispatchQueue.concurrentPerform(iterations: 2) { index in
+                do { try stores[index].record(result) } catch { failures.add("\(error)") }
+            }
+            #expect(failures.all.isEmpty, "round \(round): \(failures.all)")
+        }
+        #expect(try stores[0].scans().count == 10)
+        #expect(try stores[0].size(of: f.path("d7"), atScan: 10)?.files == 1)
+    }
+
+    final class Failures: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [String] = []
+        func add(_ item: String) { lock.withLock { items.append(item) } }
+        var all: [String] { lock.withLock { items } }
+    }
+
     @Test func recentScansAreNotThinned() throws {
         let f = try baseFixture()
         let s = try f.store()

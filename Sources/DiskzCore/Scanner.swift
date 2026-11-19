@@ -8,7 +8,8 @@ public struct ScanError: Error, CustomStringConvertible {
 public enum Scanner {
     /// Walks `root` without following symlinks or crossing into other mounted volumes.
     /// `control` can pause or cancel the walk; a cancelled scan throws `ScanCancelled`.
-    public static func scan(root: String, control: ScanControl = ScanControl()) throws -> ScanResult {
+    /// `now` is the moment the "added in the last 7 / 30 days" windows count back from.
+    public static func scan(root: String, control: ScanControl = ScanControl(), now: Date = Date()) throws -> ScanResult {
         guard let resolved = realpath(root, nil) else {
             throw ScanError(description: "cannot resolve \(root): \(String(cString: strerror(errno)))")
         }
@@ -31,7 +32,7 @@ public enum Scanner {
         // Disk used and free are measured first, before the walk.
         let usage = try DiskUsage.current(of: rootPath)
 
-        let walker = Walker(device: st.st_dev, control: control)
+        let walker = Walker(device: st.st_dev, control: control, now: now)
         walker.nodes.append(ScanNode(parent: -1, name: rootPath))
         try walker.walk(fd: fd, node: 0)
         walker.attributeHardLinks()
@@ -42,7 +43,9 @@ public enum Scanner {
             finishedAt: Date(),
             diskUsed: usage.used,
             diskFree: usage.free,
-            entryErrors: walker.entryErrors)
+            entryErrors: walker.entryErrors,
+            undatedFiles: walker.undatedFiles,
+            undatedBytes: walker.undatedBytes)
     }
 }
 
@@ -50,6 +53,7 @@ public enum Scanner {
 private let cmnName: UInt32 = 0x0000_0001
 private let cmnObjType: UInt32 = 0x0000_0008
 private let cmnFileID: UInt32 = 0x0200_0000
+private let cmnAddedTime: UInt32 = 0x1000_0000
 private let cmnError: UInt32 = 0x2000_0000
 private let cmnReturnedAttrs: UInt32 = 0x8000_0000
 private let fileLinkCount: UInt32 = 0x0000_0001
@@ -61,20 +65,30 @@ private let typeDirectory: UInt32 = 2 // VDIR
 private final class Walker {
     var nodes: [ScanNode] = []
     var entryErrors = 0
+    var undatedFiles: Int64 = 0
+    var undatedBytes: Int64 = 0
+    /// "Date added" limits in seconds since 1970: later than `latest` cannot be right.
+    private let since7: Int
+    private let since30: Int
+    private let latest: Int
     private let device: dev_t
     private let control: ScanControl
     /// Files with several hard links, by inode: counted once, in the lowest-path directory.
-    private var hardLinks: [UInt64: (node: Int, alloc: Int64, logical: Int64)] = [:]
+    private var hardLinks: [UInt64: (node: Int, alloc: Int64, logical: Int64, added: Int?)] = [:]
     private let bufferSize = 256 * 1024
     private let buffer: UnsafeMutableRawPointer
     private var request = attrlist()
 
-    init(device: dev_t, control: ScanControl) {
+    init(device: dev_t, control: ScanControl, now: Date) {
         self.device = device
         self.control = control
+        let seconds = Int(now.timeIntervalSince1970)
+        since7 = seconds - 7 * 86_400
+        since30 = seconds - 30 * 86_400
+        latest = seconds + 86_400
         buffer = .allocate(byteCount: bufferSize, alignment: 8)
         request.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
-        request.commonattr = cmnReturnedAttrs | cmnName | cmnError | cmnObjType | cmnFileID
+        request.commonattr = cmnReturnedAttrs | cmnName | cmnError | cmnObjType | cmnFileID | cmnAddedTime
         request.fileattr = fileLinkCount | fileAllocSize | fileDataLength
     }
 
@@ -84,6 +98,7 @@ private final class Walker {
         try control.checkpoint(enteringDirectory: true)
         var subdirs: [String] = []
         var alloc: Int64 = 0, logical: Int64 = 0, files: Int64 = 0
+        var added7: Int64 = 0, added30: Int64 = 0
         var batches = 0
 
         // The buffer is shared with recursive calls, so each directory is read completely first.
@@ -131,6 +146,11 @@ private final class Walker {
                     inode = field.loadUnaligned(as: UInt64.self)
                     field += 8
                 }
+                var added: Int?
+                if returned.commonattr & cmnAddedTime != 0 {
+                    added = field.loadUnaligned(as: timespec.self).tv_sec
+                    field += MemoryLayout<timespec>.size
+                }
                 if type == typeDirectory {
                     subdirs.append(name)
                     continue
@@ -149,17 +169,22 @@ private final class Walker {
                     fileLogical = field.loadUnaligned(as: Int64.self)
                 }
                 if links > 1 && type == typeRegular {
-                    noteHardLink(inode: inode, node: node, alloc: fileAlloc, logical: fileLogical)
+                    noteHardLink(inode: inode, node: node, alloc: fileAlloc, logical: fileLogical, added: added)
                 } else {
                     alloc += fileAlloc
                     logical += fileLogical
                     files += 1
+                    let recent = recency(of: added, bytes: fileAlloc)
+                    added7 += recent.in7
+                    added30 += recent.in30
                 }
             }
         }
         nodes[node].ownAlloc = alloc
         nodes[node].ownLogical = logical
         nodes[node].ownFiles = files
+        nodes[node].ownAdded7 = added7
+        nodes[node].ownAdded30 = added30
 
         for name in subdirs {
             let child = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
@@ -177,9 +202,19 @@ private final class Walker {
         }
     }
 
-    private func noteHardLink(inode: UInt64, node: Int, alloc: Int64, logical: Int64) {
+    /// The file's bytes if its date added falls into the 7-day and the 30-day window.
+    private func recency(of added: Int?, bytes: Int64) -> (in7: Int64, in30: Int64) {
+        guard let added, added > 0, added <= latest else {
+            undatedFiles += 1
+            undatedBytes += bytes
+            return (0, 0)
+        }
+        return (added >= since7 ? bytes : 0, added >= since30 ? bytes : 0)
+    }
+
+    private func noteHardLink(inode: UInt64, node: Int, alloc: Int64, logical: Int64, added: Int?) {
         if let seen = hardLinks[inode], path(of: seen.node) <= path(of: node) { return }
-        hardLinks[inode] = (node, alloc, logical)
+        hardLinks[inode] = (node, alloc, logical, added)
     }
 
     func attributeHardLinks() {
@@ -187,6 +222,9 @@ private final class Walker {
             nodes[link.node].ownAlloc += link.alloc
             nodes[link.node].ownLogical += link.logical
             nodes[link.node].ownFiles += 1
+            let recent = recency(of: link.added, bytes: link.alloc)
+            nodes[link.node].ownAdded7 += recent.in7
+            nodes[link.node].ownAdded30 += recent.in30
         }
     }
 

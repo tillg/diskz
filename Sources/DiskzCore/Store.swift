@@ -37,6 +37,20 @@ public struct ChildChange: Sendable {
     public var delta: Int64?
 }
 
+/// A folder with the bytes of files added to it (and its subfolders) in the days before the latest scan.
+public struct RecentRow: Sendable {
+    public var path: String
+    public var added: Int64
+    public var alloc: Int64
+}
+
+/// Which scan the "recently added" figures belong to, and how many files had no usable date.
+public struct RecentFigures: Sendable {
+    public var scan: ScanInfo
+    public var undatedFiles: Int64
+    public var undatedBytes: Int64
+}
+
 public struct DiskSample: Sendable {
     public var at: Date
     public var usage: DiskUsage
@@ -85,6 +99,10 @@ public final class Store {
                 files INTEGER NOT NULL, unknown INTEGER NOT NULL, PRIMARY KEY(dir_id, scan_id)) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS sizes_scan ON sizes(scan_id);
             CREATE TABLE IF NOT EXISTS disk_samples(at REAL PRIMARY KEY, used INTEGER NOT NULL, free INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS recent(
+                dir_id INTEGER PRIMARY KEY, scan_id INTEGER NOT NULL, added7 INTEGER NOT NULL, added30 INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS recent_scans(
+                scan_id INTEGER PRIMARY KEY, undated_files INTEGER NOT NULL, undated_bytes INTEGER NOT NULL);
             """)
     }
 
@@ -114,23 +132,25 @@ public final class Store {
             holdsUnknown[nodes[i].parent] = true
         }
 
-        var ids: [DirKey: Int64] = [:]
-        var childrenOf: [Int64: [Int64]] = [:]
-        _ = try db.query("SELECT id, parent_id, name FROM dirs") { row in
-            ids[DirKey(parent: row.int(1), name: row.text(2))] = row.int(0)
-            childrenOf[row.int(1), default: []].append(row.int(0))
-        }
-        var last: [Int64: State] = [:]
-        _ = try db.query("""
-            SELECT s.dir_id, s.alloc, s.logical, s.files, s.unknown FROM sizes s
-            JOIN (SELECT dir_id, MAX(scan_id) AS latest FROM sizes GROUP BY dir_id) l
-              ON l.dir_id = s.dir_id AND l.latest = s.scan_id
-            """) { row in
-            last[row.int(0)] = State(alloc: row.int(1), logical: row.int(2), files: row.int(3), unknown: row.int(4) != 0)
-        }
-
         var scanID: Int64 = 0
-        try db.transaction {
+        // The state is read inside the write transaction: the app and the command-line tool can
+        // finish scans at the same moment, and each must see what the other has just written.
+        try db.transaction(immediate: true) {
+            var ids: [DirKey: Int64] = [:]
+            var childrenOf: [Int64: [Int64]] = [:]
+            _ = try db.query("SELECT id, parent_id, name FROM dirs") { row in
+                ids[DirKey(parent: row.int(1), name: row.text(2))] = row.int(0)
+                childrenOf[row.int(1), default: []].append(row.int(0))
+            }
+            var last: [Int64: State] = [:]
+            _ = try db.query("""
+                SELECT s.dir_id, s.alloc, s.logical, s.files, s.unknown FROM sizes s
+                JOIN (SELECT dir_id, MAX(scan_id) AS latest FROM sizes GROUP BY dir_id) l
+                  ON l.dir_id = s.dir_id AND l.latest = s.scan_id
+                """) { row in
+                last[row.int(0)] = State(alloc: row.int(1), logical: row.int(2), files: row.int(3), unknown: row.int(4) != 0)
+            }
+
             try db.run("""
                 INSERT INTO scans(root, started_at, finished_at, disk_used, disk_free, scanned_alloc,
                                   dir_count, unknown_dirs, entry_errors)
@@ -142,6 +162,16 @@ public final class Store {
             let insertDir = try db.prepare("INSERT INTO dirs(parent_id, name) VALUES (?, ?)")
             let insertSize = try db.prepare(
                 "INSERT INTO sizes(dir_id, scan_id, alloc, logical, files, unknown) VALUES (?, ?, ?, ?, ?, ?)")
+            // "Recently added" figures slide every day, so only the latest scan's are kept, outside the size history.
+            try db.run("""
+                DELETE FROM recent WHERE scan_id NOT IN (SELECT id FROM scans)
+                    OR scan_id IN (SELECT id FROM scans WHERE root = ?)
+                """, [result.root])
+            try db.run("DELETE FROM recent_scans WHERE scan_id NOT IN (SELECT id FROM scans) OR scan_id IN (SELECT id FROM scans WHERE root = ?)",
+                       [result.root])
+            try db.run("INSERT INTO recent_scans(scan_id, undated_files, undated_bytes) VALUES (?, ?, ?)",
+                       [scanID, result.undatedFiles, result.undatedBytes])
+            let insertRecent = try db.prepare("INSERT OR REPLACE INTO recent(dir_id, scan_id, added7, added30) VALUES (?, ?, ?, ?)")
 
             // Parents precede children, so a parent's id is known before its children are handled.
             var dirID = [Int64](repeating: -1, count: nodes.count)
@@ -168,6 +198,9 @@ public final class Store {
                 if last[id] != now {
                     try insertSize.run([id, scanID, now.alloc, now.logical, now.files, now.unknown])
                 }
+                if totals[i].added30 >= cutoff {
+                    try insertRecent.run([id, scanID, totals[i].added7, totals[i].added30])
+                }
             }
 
             // Directories under this root that had a size and were not found again are gone.
@@ -185,6 +218,52 @@ public final class Store {
 
     func rowsWritten(byScan scan: Int64) throws -> Int {
         Int(try db.query("SELECT COUNT(*) FROM sizes WHERE scan_id = ?", [scan]) { $0.int(0) }[0])
+    }
+
+    // MARK: Recently added
+
+    /// The scan the "recently added" figures of a root belong to; nil if its latest scan recorded none
+    /// (for example because it was made by a version that did not collect them).
+    public func recentFigures(ofRoot root: String) throws -> RecentFigures? {
+        guard let latest = try lastScan(ofRoot: root) else { return nil }
+        return try db.query("SELECT undated_files, undated_bytes FROM recent_scans WHERE scan_id = ?", [latest.id]) {
+            RecentFigures(scan: latest, undatedFiles: $0.int(0), undatedBytes: $0.int(1))
+        }.first
+    }
+
+    /// Folders ranked by the bytes of files added in the 7 or 30 days before the root's latest scan.
+    /// A folder is left out when one subfolder holds at least 80 % of its added bytes, so the list
+    /// names the folder that received the files rather than every folder above it.
+    public func recentlyAdded(ofRoot root: String, days: Int, limit: Int = 50) throws -> [RecentRow] {
+        guard let figures = try recentFigures(ofRoot: root) else { return [] }
+        let column = days <= 7 ? "added7" : "added30"
+        var added: [Int64: Int64] = [:], alloc: [Int64: Int64] = [:]
+        _ = try db.query("""
+            SELECT r.dir_id, r.\(column), s.alloc FROM recent r
+            LEFT JOIN sizes s ON s.dir_id = r.dir_id
+             AND s.scan_id = (SELECT MAX(scan_id) FROM sizes WHERE dir_id = r.dir_id AND scan_id <= ?1)
+            WHERE r.scan_id = ?1 AND r.\(column) >= ?2
+            """, [figures.scan.id, cutoff]) { row in
+            added[row.int(0)] = row.int(1)
+            alloc[row.int(0)] = row.int(2)
+        }
+        if added.isEmpty { return [] }
+        var tree = Comparison(entries: [:], inaccessible: [], parentOf: [:], nameOf: [:])
+        _ = try db.query("SELECT id, parent_id, name FROM dirs") { row in
+            tree.parentOf[row.int(0)] = row.int(1)
+            tree.nameOf[row.int(0)] = row.text(2)
+        }
+        var hidden = Set<Int64>()
+        for (id, bytes) in added {
+            guard let parent = tree.parentOf[id], let parentBytes = added[parent] else { continue }
+            if bytes * 5 >= parentBytes * 4 { hidden.insert(parent) }
+        }
+        return added
+            .filter { !hidden.contains($0.key) }
+            .map { RecentRow(path: tree.path(of: $0.key), added: $0.value, alloc: alloc[$0.key] ?? 0) }
+            .sorted { $0.added != $1.added ? $0.added > $1.added : $0.path < $1.path }
+            .prefix(limit)
+            .map { $0 }
     }
 
     // MARK: Disk usage samples

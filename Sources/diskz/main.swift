@@ -8,11 +8,13 @@ let usage = """
       scans                list recorded scans
       top [PATH]           largest subdirectories of PATH (default: the scanned root)
       diff [FROM TO]       directories that changed between two scans (default: the last two)
+      recent               directories that received the most new files before the latest scan
 
     options:
       --db FILE            database file (default: ~/Library/Application Support/diskz/diskz.sqlite)
       --scan ID            scan to show with `top` (default: the latest)
-      -n COUNT             number of lines for `top` and `diff` (default: 25)
+      -n COUNT             number of lines for `top`, `diff` and `recent` (default: 25)
+      --days 7|30          period for `recent` (default: 7)
     """
 
 func fail(_ message: String) -> Never {
@@ -52,6 +54,7 @@ var dbPath = option("--db")
 
 let scanOption = number("--scan")
 let count = Int(number("-n") ?? 25)
+let days = Int(number("--days") ?? 7)
 guard let command = args.first else { fail(usage) }
 args.removeFirst()
 
@@ -73,6 +76,8 @@ do {
         print("  scanned        \(bytes(totals.alloc)) in \(totals.files) files, \(result.nodes.count) directories")
         print("  not attributed \(bytes(result.diskUsed - totals.alloc))")
         print("  unknown        \(result.nodes.count(where: \.unknown)) unreadable directories, \(result.entryErrors) unreadable entries")
+        print("  added          \(bytes(totals.added7)) in the last 7 days, \(bytes(totals.added30)) in the last 30 days"
+            + " (\(result.undatedFiles) files without a usable date, \(bytes(result.undatedBytes)))")
         print(String(format: "  took           %.1f s", seconds))
 
     case "scans":
@@ -104,6 +109,16 @@ do {
         if changes.isEmpty { print("no changes between scan \(from) and scan \(to)") }
         for c in changes {
             print("\(pad((c.delta > 0 ? "+" : "") + bytes(c.delta), 11))  \(pad(bytes(c.after), 10))  \(c.path)")
+        }
+
+    case "recent":
+        guard let latest = try store.scans().last else { fail("no scans recorded yet") }
+        guard let figures = try store.recentFigures(ofRoot: latest.root) else {
+            fail("the latest scan has no figures on recently added files; scan again with this version")
+        }
+        print("files added in the \(days <= 7 ? 7 : 30) days before the scan of \(dateFormat.string(from: figures.scan.startedAt))")
+        for row in try store.recentlyAdded(ofRoot: latest.root, days: days, limit: count) {
+            print("\(pad("+" + bytes(row.added), 11))  \(pad(bytes(row.alloc), 10))  \(row.path)")
         }
 
     default:

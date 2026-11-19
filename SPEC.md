@@ -88,6 +88,7 @@ SQLite database at `~/Library/Application Support/diskz/diskz.sqlite`.
 - **`scans`**: start, end, status, volume used and free bytes.
 - **`dirs`**: id, parent, name. One row per directory ever seen.
 - **`disk_samples`**: time, disk used, disk free. Written at the start of every scan attempt, so the figure is kept even if the scan is cancelled.
+- **`recent`** and **`recent_scans`**: per directory, the bytes of files added in the 7 and 30 days before a scan, and per scan how many files had no usable date. These figures slide every day, so only the latest scan's are kept; they are not part of the size history.
 - **`sizes`**: directory, scan, allocated bytes, logical bytes, file count. A row is written **only when the value differs** from that directory's previous row.
 
 Rules:
@@ -104,8 +105,9 @@ A normal window, opened from a **menu bar item** that shows the last scan time, 
 
 | Task | View |
 |---|---|
-| How full is the disk, and how did that develop? | **Overview:** used and free space over time, with the "Not attributed" share. |
-| What crept in lately? | **Growers:** pick a period (last day, 7 days, 30 days, all history); lists the folders that gained space since the scan at the start of that period, largest gain first. Each row has a small trend line and a word for the pattern: *steady*, *one jump* (one step between two scans carries at least 80 % of the gain), *up and down* (the size moved more than twice as much as it gained), or *was < 1 MB* (no earlier size: new, or too small to have a history). A row that lies inside another listed folder is marked with an arrow, because the outer folder's gain already includes it. The view names the two scans it compares and says so when the history is shorter than the period. Periods count back from the latest scan. Added after milestone 3 at the user's request. |
+| How full is the disk, and how did that develop? | **Dashboard** (start screen, formerly Overview): used and free space over time, with the "Not attributed" share. |
+| What crept in lately? | **Growers:** pick a period (last day, 7 days, 30 days, all history); lists the folders that gained space since the scan at the start of that period, largest gain first. Each row has a small trend line and a word for the pattern: *steady*, *one jump* (one step between two scans carries at least 80 % of the gain), *up and down* (the size moved more than twice as much as it gained), or *was < 1 MB* (no earlier size: new, or too small to have a history). A row that lies inside another listed folder is marked with an arrow, because the outer folder's gain already includes it. The view names the two scans it compares and says so when the history is shorter than the period; the volume's own gain is shown in that line, not as a row. Periods count back from the latest scan. Added after milestone 3 at the user's request. |
+| What arrived lately? | **Recently added:** folders ranked by the bytes of files whose "date added" lies in the 7 or 30 days before the latest scan. Works from one scan, so it also covers the time before diskz was installed. A folder is left out when one subfolder holds at least 80 % of its figure; rows inside another listed folder carry the same arrow as in Growers. "Added" is not net growth: files that came and went are missing, a file that replaced an older one counts in full, and a file written in place (a disk image, a database) keeps its old date. Added after milestone 3 at the user's request. |
 | What grew? | **Changes:** pick two dates; lists the top growing and shrinking directories with their delta. This is the main view. A directory is left out when one subdirectory explains at least 80 % of its change, so the list names the folder that grew, not every parent up to `/`. A tree that is entirely new or entirely gone is listed as its top folder only. A folder that merely became readable (e.g. after granting Full Disk Access) is not listed as growth. |
 | Where is the space now? | **Browser:** a table of subfolders, sortable by size and by change since a chosen scan; double-click opens a folder. (A table you drill into, not a tree outline: simpler, and enough to answer the question.) |
 | When did this folder grow? | **Directory detail:** size-over-time chart for one directory, with "Reveal in Finder". |
@@ -172,7 +174,7 @@ Built: `Diskz.app` (menu bar only), idle scheduler, pause/resume/cancel in the s
 | Full app scan | Pass. With Full Disk Access, started by the idle rule (with a 3-second test threshold) and paused 9 times by real input: 1,025,317 folders, 270 unreadable, 574 GB scanned (decimal). Walking took 569 s of wall time including pauses; the final save, which cannot pause, took 0.9 s. The CLI reads the result from the shared database. |
 | A8 | Partly. The scanner reports unreadable folders as unknown (milestone 1) and the menu shows their count, but a complete app scan without Full Disk Access was not observed, because access was granted while it ran. |
 | Start at login | Not tested. Needs the toggle switched on and a logout. |
-| Automatic start under the real 5-minute rule | Not observed yet. The first is due after 2026-11-19 14:11 (a manual scan at 14:08 moved it); the log will show it. |
+| Automatic start under the real 5-minute rule | Not observed yet. The first is due after 2026-11-19 19:04 (manual scans at 14:08 and 19:01 moved it); the log will show it. |
 | Failed scans | A scan that fails or is discarded is retried after one hour at the earliest (unit test), so a lasting fault cannot restart it every second. |
 | Menu | The user operated it; "Finish scan now" worked. A stale status line (it did not refresh while the menu was open) was reported and fixed; the fix is not yet confirmed by the user. |
 | Logo | `logo.svg`, supplied by the user. App icon and menu bar icon are rendered from it by `scripts/make-icon.sh`. |
@@ -202,7 +204,22 @@ Known limit: the per-folder chart shows recorded sizes as they were, so a parent
 | Periods | On the 120-scan history the baselines are 1 day, 7 days and 30 days back and the oldest scan, as intended. Only "Last 7 days" was rendered as an image. |
 | Not verified | Switching periods and selecting rows in the real window. Real usefulness: the app has two scans 40 minutes apart; the view needs about a week of daily scans. |
 
-Test note: several scanner tests became flaky during this work. Cause: a Finder window showing the temp folder wrote `.DS_Store` into the test folders, which the scanner correctly counted. Fixtures now sit one level deeper. The fix is plausible but unconfirmed, because Finder had stopped writing those files when the suite was rerun (14 passes).
+Test note: several scanner tests became flaky during this work. Cause: a Finder window showing the temp folder wrote `.DS_Store` into the test folders, which the scanner correctly counted. Moving the fixtures one level deeper did not hold; see the note under "Recently added results".
+
+### Recently added results (2026-11-18)
+
+| Check | Result |
+|---|---|
+| The date exists and is read correctly | The bulk scan call returns "date added" for every entry of a real folder, equal to what Foundation reports. Automated tests compare the scanner's totals with an independent Foundation walk over files aged 0, 5, 20 and 100 days. |
+| What changes the date | Probed: appending to a file and renaming it in place keep the date; moving it to another folder, an atomic save (temp file renamed over it) and copying set a new one. |
+| Bad dates | A date more than a day after the scan counts as undated, not as recent (test). On the real disk no file was undated. |
+| Scan cost | No measurable difference: three alternating runs of the old and new scanner on two folders (about 4 s and 10 s) agree within noise; a full scan took 175 s against 174 s before. |
+| Real disk | A full scan into a scratch database: 62.8 GB added in the last 7 days and 144.4 GB in the last 30, of 579 GB scanned. The ranking surfaces app updates, build output, temp folders and system caches, as expected for a measure of arrivals rather than growth. The home folder and its library top the list as totals, because no single subfolder holds 80 % of their figure; the volume's own total is shown in the header instead of the table. An independent Foundation walk of two real folders agrees: one exactly, one within 1.5 % (difference not investigated). |
+| Rendering | Snapshots from generated data, from the real scratch scan (light and dark), and from the app's own database (empty state, since its scans predate the figures). |
+| Real window | The app's database got its figures from a manual scan the same evening; the user's view of the filled section is still to be confirmed. |
+| Simultaneous saves | Found in use: the app and the command-line tool finished a scan in the same second and the second save failed with a uniqueness conflict (rolled back, database intact). Saving now reads its state inside the write transaction; a test with two connections recording at once reproduces the failure and passes with the fix. |
+
+Test note: the `.DS_Store` disturbance came back after the first fix (fixtures one level deeper), again with Finder writing into the fixture. Fixtures now live in the package's `.build` folder; with the disturbance active minutes earlier (3 failures in 14 runs), the suite then passed 16 times in a row.
 
 ## 12. Possible later
 

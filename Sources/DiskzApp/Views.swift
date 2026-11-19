@@ -3,14 +3,15 @@ import DiskzCore
 import SwiftUI
 
 enum Section: String, CaseIterable, Identifiable {
-    case growers = "Growers", changes = "Changes", browser = "Browser", overview = "Overview", status = "Status"
+    case dashboard = "Dashboard", growers = "Growers", recent = "Recently added", changes = "Changes", browser = "Browser", status = "Status"
     var id: String { rawValue }
     var symbol: String {
         switch self {
+        case .dashboard: "gauge.with.dots.needle.33percent"
         case .growers: "chart.line.uptrend.xyaxis"
+        case .recent: "tray.and.arrow.down"
         case .changes: "arrow.up.arrow.down"
         case .browser: "folder"
-        case .overview: "chart.xyaxis.line"
         case .status: "info.circle"
         }
     }
@@ -19,7 +20,7 @@ enum Section: String, CaseIterable, Identifiable {
 struct MainWindow: View {
     let library: Library
     let model: AppModel?
-    @State var section: Section = .growers
+    @State var section: Section = .dashboard
     /// Snapshot mode has no running app to ask, so it can state that access is missing.
     var assumeNoAccess = false
 
@@ -27,10 +28,10 @@ struct MainWindow: View {
 
     var body: some View {
         NavigationSplitView {
-            List(Section.allCases, selection: Binding(get: { section }, set: { section = $0 ?? .growers })) { item in
+            List(Section.allCases, selection: Binding(get: { section }, set: { section = $0 ?? .dashboard })) { item in
                 Label(item.rawValue, systemImage: item.symbol).tag(item)
             }
-            .navigationSplitViewColumnWidth(160)
+            .navigationSplitViewColumnWidth(190) // wide enough for "Recently added"
         } detail: {
             Group {
                 if library.scans.isEmpty {
@@ -38,10 +39,11 @@ struct MainWindow: View {
                                            description: Text("diskz scans by itself when the Mac is idle. You can also choose “Scan now” from its menu bar icon."))
                 } else {
                     switch section {
+                    case .dashboard: DashboardView(library: library)
                     case .growers: GrowersView(library: library)
+                    case .recent: RecentView(library: library, model: model)
                     case .changes: ChangesView(library: library)
                     case .browser: BrowserView(library: library)
-                    case .overview: OverviewView(library: library)
                     case .status: StatusView(library: library, model: model, accessMissing: accessMissing)
                     }
                 }
@@ -58,6 +60,8 @@ struct GrowersView: View {
     let library: Library
     @State private var window = Window.week
     @State private var result: Library.Growers?
+    @State private var rows: [Library.Grower] = []
+    @State private var order = [KeyPathComparator(\Library.Grower.change.delta, order: .reverse)]
     @State private var selection: String?
 
     enum Window: String, CaseIterable, Identifiable {
@@ -88,7 +92,8 @@ struct GrowersView: View {
                 if let result {
                     // Both scan dates, on a line of their own so they are never cut off.
                     Text("Comparing the scans of \(formatDate(result.baseline.startedAt)) and \(formatDate(result.latest.startedAt))"
-                        + (result.coversWindow ? "" : " (the history does not go back further)"))
+                        + (result.coversWindow ? "" : " (the history does not go back further)")
+                        + (result.total.map { ". Volume: \(formatSigned($0))" } ?? ""))
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
@@ -100,28 +105,31 @@ struct GrowersView: View {
                 ContentUnavailableView("Only one scan so far", systemImage: "clock",
                                        description: Text("Growth appears after the second scan."))
                     .frame(maxHeight: .infinity)
-            } else if let result, !result.rows.isEmpty {
-                Table(result.rows, selection: $selection) {
-                    TableColumn("Folder") { row in
+            } else if !rows.isEmpty {
+                Table(rows, selection: $selection, sortOrder: $order) {
+                    TableColumn("Folder", value: \.change.path) { row in
                         HStack(spacing: 4) {
                             if row.inside != nil {
                                 Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
                             }
                             Text(library.display(row.change.path)).lineLimit(1).truncationMode(.middle)
                         }
+                        .padding(.leading, nestingIndent(row.depth))
                         .help(row.inside.map { "Part of \(library.display($0)), which is listed too. Its gain already includes this one." } ?? row.change.path)
                     }
-                    TableColumn("Grew by") { row in Text(formatSigned(row.change.delta)).monospacedDigit() }.width(110)
-                    TableColumn("Now") { row in Text(formatBytes(row.change.after)).monospacedDigit() }.width(90)
-                    TableColumn("How") { row in
+                    TableColumn("Grew by", value: \.change.delta) { row in Text(formatSigned(row.change.delta)).monospacedDigit() }.width(110)
+                    TableColumn("Now", value: \.change.after) { row in Text(formatBytes(row.change.after)).monospacedDigit() }.width(90)
+                    TableColumn("How", value: \.how) { row in
                         HStack(spacing: 8) {
                             Sparkline(sizes: row.sizes).frame(width: 70, height: 16)
-                            Text(how(row)).foregroundStyle(.secondary)
+                            Text(row.how).foregroundStyle(.secondary)
                         }
                     }
                     .width(170)
                 }
-                if result.rows.contains(where: { $0.inside != nil }) {
+                .revealsInFinder()
+                .onChange(of: order) { rows.sort(using: order) }
+                if rows.contains(where: { $0.inside != nil }) {
                     Label("Rows marked with this arrow lie inside another listed folder, whose gain already includes theirs. Do not add them up.",
                           systemImage: "arrow.turn.down.right")
                         .font(.caption).foregroundStyle(.secondary)
@@ -140,18 +148,132 @@ struct GrowersView: View {
         }
         .task(id: Key(window: window, revision: library.revision)) {
             result = library.growers(window: window.seconds)
-            if result?.rows.contains(where: { $0.id == selection }) != true { selection = result?.rows.first?.id }
+            rows = (result?.rows ?? []).sorted(using: order)
+            if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
         }
     }
 }
 
-private func how(_ row: Library.Grower) -> String {
-    if row.change.before == 0 { return "was < 1 MB" } // new, or too small to have a history
-    switch row.pattern {
-    case .jump: return "one jump"
-    case .steady: return "steady"
-    case .fluctuating: return "up and down"
-    case nil: return ""
+// MARK: Recently added files
+
+struct RecentView: View {
+    let library: Library
+    /// The running app, for "Scan now"; nil in snapshots.
+    let model: AppModel?
+    @State private var days = 7
+    @State private var figures: RecentFigures?
+    @State private var rows: [Library.RecentFolder] = []
+    @State private var total: Int64?
+    @State private var order = [KeyPathComparator(\Library.RecentFolder.row.added, order: .reverse)]
+    @State private var selection: String?
+
+    private struct Key: Equatable {
+        var days: Int, revision: Int
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Files added in the", selection: $days) {
+                    Text("Last 7 days").tag(7)
+                    Text("Last 30 days").tag(30)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                if let figures {
+                    // Single lines on purpose: a wrapping text block above a table breaks the layout.
+                    Text((total.map { "\(formatBytes($0)) in total, counted" } ?? "Counted")
+                        + " back from the scan of \(formatDate(figures.scan.startedAt))."
+                        + (figures.undatedFiles > 0 ? " \(figures.undatedFiles.formatted()) files (\(formatBytes(figures.undatedBytes))) had no usable date." : ""))
+                        .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                    Text("“Added” is the size of files that arrived (new, downloaded, copied, moved in, re-saved). It is not net growth.")
+                        .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Divider()
+            if figures == nil {
+                ContentUnavailableView {
+                    Label("No figures yet", systemImage: "tray.and.arrow.down")
+                } description: {
+                    Text(model?.isScanning == true
+                        ? "A scan is running. The figures appear when it has finished."
+                        : "These figures are collected during a scan, and the last scan was made before diskz could collect them. A scan takes a few minutes.")
+                } actions: {
+                    if let model, !model.isScanning {
+                        Button("Scan now") { model.scanNow() }
+                    }
+                }
+                .frame(maxHeight: .infinity)
+            } else if rows.isEmpty {
+                ContentUnavailableView("Nothing added", systemImage: "checkmark.circle",
+                                       description: Text("No folder received 1 MB or more of new files in this period."))
+                    .frame(maxHeight: .infinity)
+            } else {
+                Table(rows, selection: $selection, sortOrder: $order) {
+                    TableColumn("Folder", value: \.row.path) { item in
+                        HStack(spacing: 4) {
+                            if item.inside != nil {
+                                Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
+                            }
+                            Text(library.display(item.row.path)).lineLimit(1).truncationMode(.middle)
+                        }
+                        .padding(.leading, nestingIndent(item.depth))
+                        .help(item.inside.map { "Part of \(library.display($0)), which is listed too. Its figure already includes this one." } ?? item.row.path)
+                    }
+                    TableColumn("Added", value: \.row.added) { item in Text(formatSigned(item.row.added)).monospacedDigit() }.width(110)
+                    TableColumn("Folder size", value: \.row.alloc) { item in Text(formatBytes(item.row.alloc)).monospacedDigit() }.width(110)
+                }
+                .revealsInFinder()
+                .onChange(of: order) { rows.sort(using: order) }
+                if rows.contains(where: { $0.inside != nil }) {
+                    Label("Rows marked with this arrow lie inside another listed folder, whose figure already includes theirs. Do not add them up.",
+                          systemImage: "arrow.turn.down.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.vertical, 5)
+                }
+                if let selection {
+                    Divider()
+                    FolderDetail(library: library, path: selection).frame(height: 230)
+                }
+            }
+        }
+        .task(id: Key(days: days, revision: library.revision)) {
+            figures = library.recentFigures()
+            (total, rows) = library.recentlyAdded(days: days)
+            rows.sort(using: order)
+            if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
+        }
+    }
+}
+
+/// Rows inside another listed folder step in, one more step per level of nesting.
+private func nestingIndent(_ depth: Int) -> CGFloat { CGFloat(min(depth, 4)) * 22 }
+
+/// Shows a folder in Finder. A folder that no longer exists cannot be selected, so the nearest
+/// folder above it that still exists is shown instead.
+@MainActor
+func revealInFinder(_ path: String) {
+    var existing = path
+    while !FileManager.default.fileExists(atPath: existing), existing != "/" {
+        existing = (existing as NSString).deletingLastPathComponent
+    }
+    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: existing)])
+}
+
+extension View {
+    /// For a table of folders: double-click (or Return) and a right-click menu item reveal the folder in Finder.
+    func revealsInFinder() -> some View {
+        contextMenu(forSelectionType: String.self) { paths in
+            if let path = paths.first {
+                Button("Reveal in Finder") { revealInFinder(path) }
+            }
+        } primaryAction: { paths in
+            if let path = paths.first { revealInFinder(path) }
+        }
     }
 }
 
@@ -215,7 +337,11 @@ struct ChangesView: View {
     struct Row: Identifiable {
         let change: Change
         var id: String { change.path }
+        /// Size of the change regardless of direction: the default order, largest change first.
+        var magnitude: Int64 { abs(change.delta) }
     }
+
+    @State private var order = [KeyPathComparator(\Row.magnitude, order: .reverse)]
 
     private struct Key: Equatable {
         var from: Int64, to: Int64, revision: Int
@@ -238,23 +364,25 @@ struct ChangesView: View {
                                        description: Text("No folder grew or shrank between these two scans."))
                     .frame(maxHeight: .infinity)
             } else {
-                Table(rows, selection: $selection) {
-                    TableColumn("Folder") { row in
+                Table(rows, selection: $selection, sortOrder: $order) {
+                    TableColumn("Folder", value: \.change.path) { row in
                         Text(library.display(row.change.path))
                             .lineLimit(1).truncationMode(.middle).help(row.change.path)
                     }
-                    TableColumn("Change") { row in
+                    TableColumn("Change", value: \.change.delta) { row in
                         Label(formatSigned(row.change.delta), systemImage: row.change.delta > 0 ? "arrow.up" : "arrow.down")
                             .monospacedDigit()
                     }
                     .width(130)
-                    TableColumn("Now") { row in Text(formatBytes(row.change.after)).monospacedDigit() }.width(90)
-                    TableColumn("Before") { row in
+                    TableColumn("Now", value: \.change.after) { row in Text(formatBytes(row.change.after)).monospacedDigit() }.width(90)
+                    TableColumn("Before", value: \.change.before) { row in
                         // No earlier size means new, or too small to have a history.
                         Text(row.change.before == 0 ? "< 1 MB" : formatBytes(row.change.before)).monospacedDigit().foregroundStyle(.secondary)
                     }
                     .width(90)
                 }
+                .revealsInFinder()
+                .onChange(of: order) { rows.sort(using: order) }
                 if let selection {
                     Divider()
                     FolderDetail(library: library, path: selection).frame(height: 230)
@@ -262,7 +390,7 @@ struct ChangesView: View {
             }
         }
         .task(id: Key(from: library.fromScan, to: library.toScan, revision: library.revision)) {
-            rows = library.changes().map(Row.init)
+            rows = library.changes().map(Row.init).sorted(using: order)
             if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
         }
     }
@@ -320,7 +448,13 @@ struct BrowserView: View {
                     }
                     .width(130)
                 }
-                .contextMenu(forSelectionType: String.self) { _ in } primaryAction: { ids in
+                // Double-click opens the folder here, as in Finder; revealing it is on the right-click menu.
+                .contextMenu(forSelectionType: String.self) { ids in
+                    if let first = ids.first {
+                        Button("Open") { library.navigation.open(first) }
+                        Button("Reveal in Finder") { revealInFinder(first) }
+                    }
+                } primaryAction: { ids in
                     if let first = ids.first { library.navigation.open(first) }
                 }
                 .onChange(of: order) { rows.sort(using: order) }
@@ -411,8 +545,8 @@ struct FolderDetail: View {
                 Text(library.display(path)).font(.headline).lineLimit(1).truncationMode(.middle)
                 if let last = marks.last { Text(formatBytes(last.bytes)).foregroundStyle(.secondary) }
                 Spacer()
-                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-                    .disabled(!FileManager.default.fileExists(atPath: path))
+                Button("Reveal in Finder") { revealInFinder(path) }
+                    .help(FileManager.default.fileExists(atPath: path) ? "" : "This folder no longer exists; Finder shows the nearest folder above it.")
             }
             if marks.count < 2 {
                 Text(marks.isEmpty ? "No readable size recorded for this folder." : "A timeline appears after the second scan.")
@@ -456,9 +590,9 @@ struct FolderDetail: View {
     }
 }
 
-// MARK: Overview
+// MARK: Dashboard
 
-struct OverviewView: View {
+struct DashboardView: View {
     let library: Library
     @State private var hover: Date?
 
@@ -573,6 +707,10 @@ struct StatusView: View {
         let id: String
     }
 
+    @State private var selection: String?
+    @State private var order = [KeyPathComparator(\Unreadable.id)]
+    private var rows: [Unreadable] { unreadable.map(Unreadable.init).sorted(using: order) }
+
     private struct Key: Equatable {
         var to: Int64, revision: Int
     }
@@ -604,11 +742,12 @@ struct StatusView: View {
             Divider()
             Text("\(unreadable.count) folders could not be read at the last scan")
                 .font(.headline).padding(.horizontal, 20).padding(.vertical, 10)
-            Table(unreadable.map(Unreadable.init)) {
-                TableColumn("Unreadable folder") { row in
+            Table(rows, selection: $selection, sortOrder: $order) {
+                TableColumn("Unreadable folder", value: \.id) { row in
                     Label(library.display(row.id), systemImage: "lock").lineLimit(1).truncationMode(.middle)
                 }
             }
+            .revealsInFinder()
         }
         .task(id: Key(to: library.latest?.id ?? 0, revision: library.revision)) { unreadable = library.unknownDirectories() }
     }

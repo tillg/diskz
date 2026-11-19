@@ -8,10 +8,16 @@ public struct ScanNode: Sendable {
     public var ownAlloc: Int64 = 0
     public var ownLogical: Int64 = 0
     public var ownFiles: Int64 = 0
+    /// Allocated bytes of the files directly inside whose "date added" lies in the 7 / 30 days before the scan.
+    public var ownAdded7: Int64 = 0
+    public var ownAdded30: Int64 = 0
     /// The directory could not be read (completely), so its size is not known.
     public var unknown = false
 
-    public init(parent: Int, name: String, ownAlloc: Int64 = 0, ownLogical: Int64 = 0, ownFiles: Int64 = 0, unknown: Bool = false) {
+    public init(parent: Int, name: String, ownAlloc: Int64 = 0, ownLogical: Int64 = 0, ownFiles: Int64 = 0,
+                ownAdded7: Int64 = 0, ownAdded30: Int64 = 0, unknown: Bool = false) {
+        self.ownAdded7 = ownAdded7
+        self.ownAdded30 = ownAdded30
         self.parent = parent
         self.name = name
         self.ownAlloc = ownAlloc
@@ -25,6 +31,8 @@ public struct DirTotals: Sendable, Equatable {
     public var alloc: Int64 = 0
     public var logical: Int64 = 0
     public var files: Int64 = 0
+    public var added7: Int64 = 0
+    public var added30: Int64 = 0
 }
 
 public struct ScanResult: Sendable {
@@ -36,8 +44,14 @@ public struct ScanResult: Sendable {
     public var diskFree: Int64
     /// Directory entries whose attributes could not be read.
     public var entryErrors: Int
+    /// Files without a usable "date added" (missing, or more than a day in the future); they count as not recent.
+    public var undatedFiles: Int64 = 0
+    public var undatedBytes: Int64 = 0
 
-    public init(nodes: [ScanNode], startedAt: Date, finishedAt: Date, diskUsed: Int64, diskFree: Int64, entryErrors: Int) {
+    public init(nodes: [ScanNode], startedAt: Date, finishedAt: Date, diskUsed: Int64, diskFree: Int64, entryErrors: Int,
+                undatedFiles: Int64 = 0, undatedBytes: Int64 = 0) {
+        self.undatedFiles = undatedFiles
+        self.undatedBytes = undatedBytes
         self.nodes = nodes
         self.startedAt = startedAt
         self.finishedAt = finishedAt
@@ -50,12 +64,16 @@ public struct ScanResult: Sendable {
 
     /// Recursive totals per node, same indexing as `nodes`.
     public func totals() -> [DirTotals] {
-        var t = nodes.map { DirTotals(alloc: $0.ownAlloc, logical: $0.ownLogical, files: $0.ownFiles) }
+        var t = nodes.map {
+            DirTotals(alloc: $0.ownAlloc, logical: $0.ownLogical, files: $0.ownFiles, added7: $0.ownAdded7, added30: $0.ownAdded30)
+        }
         for i in stride(from: nodes.count - 1, to: 0, by: -1) {
             let p = nodes[i].parent
             t[p].alloc += t[i].alloc
             t[p].logical += t[i].logical
             t[p].files += t[i].files
+            t[p].added7 += t[i].added7
+            t[p].added30 += t[i].added30
         }
         return t
     }

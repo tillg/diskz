@@ -37,8 +37,8 @@ scripts/build-app.sh           # builds and signs ~/Applications/Diskz.app
 open ~/Applications/Diskz.app
 ```
 
-The logo is `logo.svg`. The app icon and the menu bar icon in `Resources/` are rendered from it
-by `scripts/make-icon.sh` (needs `rsvg-convert`); rerun that only when the logo changes.
+The logo is `logo.svg`; `Resources/logo-menubar.svg` is its one-colour version. The app icon and
+the menu bar icons in `Resources/` are rendered from them by `scripts/make-icon.sh` (needs `rsvg-convert`); rerun that only when the logo changes.
 
 Diskz shows its logo in the menu bar; "Open diskz" in its menu opens the window. It scans the internal Data
 volume by itself when all of these hold:
@@ -58,18 +58,25 @@ once the Mac is idle again. Its menu offers:
 | Grant Full Disk Access… | opens the right System Settings pane (shown only while access is missing) |
 | Scan now / Finish scan now | scans regardless of the idle conditions |
 | Start at login | off until you switch it on |
+| Settings… | choose the menu bar icon: the logo in colour, or in one colour like the system icons |
 
-The window has five sections:
+The window has six sections:
 
 | Section | Answers |
 |---|---|
+| Dashboard | The start screen: how full is the disk, and how did that develop? Tiles for used, free, in folders and "not attributed", and a chart of disk use over time. |
 | Growers | What grew lately? Pick last day, 7 days, 30 days or all history; folders are ranked by how much they gained, with a small trend line and a word for how they grew (steady, one jump, up and down, was < 1 MB). Rows inside another listed folder are marked with an arrow; don't add them up. |
+| Recently added | Which folders received the most new files in the 7 or 30 days before the last scan? Works from a single scan. "Added" is the size of files that arrived (new, downloaded, copied, moved in, re-saved); it is not net growth. |
 | Changes | What grew or shrank between two scans you pick? Largest change first. |
 | Browser | Where is the space now? A table of subfolders with size and change; double-click to open a folder, back and forward buttons (⌘[ and ⌘]) as in Finder. |
-| Overview | How full is the disk, and how did that develop? Includes the "not attributed" share. |
 | Status | Is scanning working? Last scan, database size, Full Disk Access (with a button to grant it), and the folders that could not be read. |
 
-Selecting a folder in Growers, Changes or Browser shows its size over time and a "Reveal in Finder" button.
+In every list, clicking a column header sorts by that column, and double-clicking a row shows the
+folder in Finder (also on the right-click menu). The Browser is the exception: double-click opens
+the folder inside diskz, as in Finder, and "Reveal in Finder" is on the right-click menu. A folder
+that no longer exists cannot be shown; Finder then opens the nearest folder above it.
+
+Selecting a folder in Growers, Recently added, Changes or Browser shows its size over time and a "Reveal in Finder" button.
 Paths are shown without the `/System/Volumes/Data` prefix where that names the same folder.
 
 For development, `Diskz --snapshot DIR [--db FILE | --demo SCANS] [--no-access]` renders every section to PNG
@@ -95,6 +102,8 @@ diskz top                   # largest directories under the scanned root
 diskz top /Users/me -n 10   # largest subdirectories of one folder
 diskz diff                  # what grew or shrank between the last two scans of the same folder
 diskz diff 3 7              # ... between scan 3 and scan 7
+diskz recent                # folders that received the most new files in the 7 days before the last scan
+diskz recent --days 30      # ... in the 30 days before it
 ```
 
 Options:
@@ -103,7 +112,8 @@ Options:
 |---|---|---|
 | `--db FILE` | database file | `~/Library/Application Support/diskz/diskz.sqlite` |
 | `--scan ID` | scan to show with `top` | the latest |
-| `-n COUNT` | number of lines for `top` and `diff` | 25 |
+| `-n COUNT` | number of lines for `top`, `diff` and `recent` | 25 |
+| `--days 7\|30` | period for `recent` | 7 |
 
 ## Full Disk Access
 
@@ -122,6 +132,9 @@ Full Disk Access in System Settings → Privacy & Security → Full Disk Access,
 - **Cloud-only files** (iCloud and similar) are not downloaded by a scan and count as 0.
 - **History:** a SQLite database stores a directory's size only when it differs from the
   previous scan. Directories under 1 MB get no history of their own; they count toward their parent.
+- **Recently added:** each scan also totals, per folder, the bytes of files whose "date added"
+  (the date macOS keeps for when a file arrived in its folder) lies in the last 7 and 30 days.
+  Only the latest scan's figures are kept.
 - **Retention:** every scan for 30 days, then one per week for a year, then one per 30 days.
 - **`diff`** names the folder that changed, not every parent folder above it, and a tree that is
   entirely new or entirely gone as its top folder only. A folder that

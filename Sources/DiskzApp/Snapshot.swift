@@ -21,7 +21,7 @@ enum Snapshot {
             // Query times on this database, as the window would run them.
             let probe = Library(databasePath: database, root: root)
             for (name, query) in [("growers", { _ = probe.growers(window: 7 * 86_400) }), ("changes", { _ = probe.changes() }),
-                                  ("browser", { _ = probe.children(of: root) })] {
+                                  ("browser", { _ = probe.children(of: root) }), ("recent", { _ = probe.recentlyAdded(days: 30) })] {
                 let start = Date()
                 query()
                 note(String(format: "query %@: %.0f ms", name, Date().timeIntervalSince(start) * 1000))
@@ -105,8 +105,11 @@ enum DemoData {
                 let wobble = Double((day * 7 + index * 13) % 5) * 0.05
                 let size = max(0.5, f.2 + f.3 * Double(day) + wobble)
                 let unknown = day < f.4
+                // New files arrive faster than the folder grows, because old ones are cleaned out.
+                let arriving = f.2 == 0 || unknown ? 0 : abs(f.3) * 1.5 * Double(gb)
                 return ScanNode(parent: f.0, name: f.1, ownAlloc: f.2 == 0 || unknown ? 0 : Int64(size * Double(gb)),
-                                ownFiles: f.2 == 0 ? 0 : 1000, unknown: unknown)
+                                ownFiles: f.2 == 0 ? 0 : 1000, ownAdded7: Int64(arriving * 7), ownAdded30: Int64(arriving * 30),
+                                unknown: unknown)
             }
             var result = ScanResult(nodes: nodes, startedAt: date, finishedAt: date.addingTimeInterval(180),
                                     diskUsed: 0, diskFree: 0, entryErrors: 0)
